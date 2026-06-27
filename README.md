@@ -1,6 +1,6 @@
 # ⚡ PJME Grid Load Forecasting Service (Frontend Client)
 
-An AWS Hosted web application and user interface designed to interact with a serverless machine learning inference backend to forecast PJM East (PJME) electrical grid load.
+An AWS Hosted web application and user interface designed to interact with a serverless machine learning inference and AI copilot backend to forecast PJM East (PJME) electrical grid load and provide real-time operational insights.
 
 Built with **Next.js 16 (App Router)**, **React 19**, **Tailwind CSS v4**, and **TypeScript**, this dashboard maps real-time user-input telemetry parameters to a decoupled FastAPI-based serverless endpoint.
 
@@ -11,22 +11,32 @@ Built with **Next.js 16 (App Router)**, **React 19**, **Tailwind CSS v4**, and *
 - **Decoupled Telemetry Transmission:** Connects dynamically with an AWS Lambda backend using HTTP POST payloads.
 - **Strict Parameter Schema Mapping:** Exposes input fields mapped precisely to the model feature matrix.
 - **Real-time Inference Output Display:** Instantly computes and displays estimated demand in **Megawatts (MW)** with status handlers for computing/loading states and network errors.
+- **AWS Bedrock Grid Co-Pilot Chat:** Features an integrated, context-aware chatbot powered by **Amazon Bedrock (Claude 3.5 Haiku)**. It evaluates full system parameters (temporal inputs, lags, rolling averages, and prediction outputs) to generate real-time grid intelligence and decision support.
 - **Responsive Premium Theme:** Styled with a dark-mode palette, using emerald-400 highlights for modern grid-monitoring aesthetics.
 
 ---
 
 ## 🛠️ Architecture Overview
 
-The interface serves as the frontend layer of a dual-tier serverless forecasting system:
+The system features two main endpoints running on the decoupled AWS serverless backend:
 
 ```mermaid
-graph LR
-    User([User Client]) -->|1. Form Input Matrix| Frontend[Next.js Frontend]
-    Frontend -->|2. HTTP POST JSON Payload| Gateway[API Gateway / AWS Lambda]
-    Gateway -->|3. FastAPI / Mangum| Backend[FastAPI Predictor Endpoint]
-    Backend -->|4. joblib.load| Model[(Trained ML Model)]
-    Backend -->|5. Telemetry Logger| CW[AWS CloudWatch Logs]
-    Backend -->|6. Return Prediction MW| Frontend
+graph TD
+    User([User Client]) -->|1. Inputs & Chat Messages| Frontend[Next.js Frontend]
+    
+    %% Predict Flow
+    Frontend -->|2a. POST /predict| Backend[FastAPI Backend / Mangum]
+    Backend -->|3a. Load & Run| Model[(Trained ML Model)]
+    
+    %% Copilot Flow
+    Frontend -->|2b. POST /copilot| Backend
+    Backend -->|3b. Call Converse API| Bedrock[(Amazon Bedrock - Claude 3.5 Haiku)]
+    
+    %% Shared Infrastructure
+    Backend -->|4. Stream Telemetry| CW[AWS CloudWatch Logs]
+    
+    Backend -->|5a. Return Prediction MW| Frontend
+    Backend -->|5b. Return AI Insight| Frontend
 ```
 
 ---
@@ -73,7 +83,7 @@ NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
 
 ## 📋 Input Metric Matrix
 
-The forecasting form expects the following parameters which are passed directly to the XGBoost/Scikit-Learn backend:
+The forecasting form and AI copilot expect the following parameters:
 
 ### Temporal Metadata
 * **Hour:** Hour of the day (0–23)
