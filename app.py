@@ -127,8 +127,8 @@ async def energy_copilot(data: CopilotRequest):
     Guidelines:
     - Provide concise, technically rigorous grid operational insights responding directly to the user's query.
     - Contextualize the live numbers and historical lags naturally.
-    - Keep responses focused (2-3 well-structured paragraphs or bullet points).
-    - Always finish your answer with a complete thought and an actionable operational recommendation. Never trail off or leave thoughts incomplete.
+    - Use clean Markdown formatting: bold highlights (**keyword**), bullet points, and Markdown tables when comparing metrics or scenarios.
+    - Always finish your answer with a complete thought and a bolded actionable operational recommendation. Never trail off or leave thoughts incomplete.
     """
     
     try:
