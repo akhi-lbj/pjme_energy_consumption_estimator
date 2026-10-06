@@ -1,5 +1,5 @@
-# 1. Use the private AWS Lambda Python base image hosted in your registry
-FROM 138071776345.dkr.ecr.ap-south-1.amazonaws.com/lambda/python:3.12
+# 1. Use the official AWS Lambda Python 3.12 base image
+FROM public.ecr.aws/lambda/python:3.12
 
 # 2. Copy the dependencies list into the container
 COPY requirements.txt ${LAMBDA_TASK_ROOT}
