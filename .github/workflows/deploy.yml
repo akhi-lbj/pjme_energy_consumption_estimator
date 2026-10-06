@@ -18,7 +18,7 @@ on:
 env:
   AWS_REGION: ap-south-1
   ECR_REPOSITORY: pjme-energy-api
-  LAMBDA_FUNCTION_NAME: PJME_Energy_Forecast_API
+  LAMBDA_FUNCTION_NAME: PJME_Inference_Engine
 
 jobs:
   test:
