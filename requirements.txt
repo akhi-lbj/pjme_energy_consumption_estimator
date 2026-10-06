@@ -1,0 +1,8 @@
+fastapi
+mangum
+pydantic
+pandas
+scikit-learn
+joblib
+watchtower
+boto3

@@ -1,0 +1,7 @@
+{
+    "Model": "Random Forest Regressor",
+    "MAE": 467.7,
+    "RMSE": 636.33,
+    "MAPE": 1.47,
+    "R2": 0.99
+}

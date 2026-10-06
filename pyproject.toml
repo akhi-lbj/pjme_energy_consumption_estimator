@@ -1,0 +1,20 @@
+[project]
+name = "1stproject"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "boto3>=1.43.36",
+    "fastapi>=0.138.0",
+    "httpx2>=2.4.0",
+    "joblib>=1.5.3",
+    "mangum>=0.21.0",
+    "pandas>=3.0.3",
+    "pytest>=9.1.1",
+    "scikit-learn>=1.9.0",
+    "watchtower>=3.4.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

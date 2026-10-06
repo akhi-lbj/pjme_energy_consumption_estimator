@@ -1,0 +1,27 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.pytest_cache/
+
+# Virtual environments
+.venv/
+env/
+venv/
+
+# Next.js Frontend
+pjme-energy-frontend/node_modules/
+pjme-energy-frontend/.next/
+pjme-energy-frontend/out/
+pjme-energy-frontend/.env*.local
+pjme-energy-frontend/.pnp
+pjme-energy-frontend/.pnp.js
+
+# OS & IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

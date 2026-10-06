@@ -1,0 +1,378 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{enumitem}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=teal,
+    filecolor=magenta,      
+    urlcolor=cyan,
+    pdftitle={Siemens Energy Software Developer Intern - Technical Interview Guide},
+    pdfpagemode=FullScreen,
+}
+
+% Code highlighting configuration
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,         
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=2
+}
+\lstset{style=mystyle}
+
+\title{\textbf{Technical Interview Study Guide\\ Siemens Energy -- Software Developer Intern (Gas Services QM)}\\ \large Deep Dive: React, FastAPI, AWS CloudWatch, and AWS Bedrock Converse API}
+\author{\textbf{Workspace Reference App Study Guide}}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+\section{Introduction \& Role Alignment}
+This document serves as your technical preparation guide for the \textbf{Software Developer Intern} position within the \textbf{Gas Services Quality Management} team in Dubai at \textbf{Siemens Energy}. 
+
+The role is focused on:
+\begin{itemize}
+    \item Designing and developing front-end interfaces using \textbf{React}.
+    \item Integrating front-ends with back-end LLM services via \textbf{Python} and \textbf{FastAPI}.
+    \item Maintaining and updating deployed applications, monitoring performance using \textbf{AWS CloudWatch}.
+    \item Contributing to digital pipelines and automating manual processes with AI tools (e.g., \textbf{AWS Bedrock}).
+\end{itemize}
+
+Your workspace project represents a concrete, full-stack implementation of this exact architecture: a \textbf{PJME Grid Load Forecasting Service} featuring a Random Forest Machine Learning (ML) inference endpoint and an interactive AWS Bedrock-powered Grid AI Co-Pilot.
+
+\section{React Concepts (Front-End)}
+The frontend application is built using \textbf{Next.js 16 (App Router)} and \textbf{React 19}. It resides in the \texttt{pjme-energy-frontend} folder. Below are the key React concepts used, referenced directly from \href{file:///c:/Akhil/AI_Engineer/1stProject/pjme-energy-frontend/src/app/page.tsx}{\texttt{src/app/page.tsx}} and \href{file:///c:/Akhil/AI_Engineer/1stProject/pjme-energy-frontend/src/app/components/EnergyCopilot.tsx}{\texttt{src/app/components/EnergyCopilot.tsx}}.
+
+\subsection{Client-Side Interactivity: \texttt{'use client'}}
+By default, Next.js App Router components are Server Components (executed on the server). Because our UI requires user interactivity, state management, and network requests triggered by user actions, we prepend the directive \texttt{'use client'} at the top of our page and component files. This instructs Next.js to package and execute these components on the browser (client-side).
+
+\subsection{State Management with \texttt{useState}}
+The React hook \texttt{useState} allows components to maintain internal, local state that triggers a re-render when modified. In our codebase, we use this in several places:
+\begin{itemize}
+    \item \textbf{Form Data State:} In \texttt{page.tsx}, we store the numeric metrics in a single object:
+    \begin{lstlisting}[language=JavaScript]
+const [formData, setFormData] = useState({
+  hour: 18,
+  dayofweek: 0,
+  quarter: 1,
+  month: 1,
+  year: 2016,
+  dayofyear: 4,
+  is_weekend: 0,
+  lag_1_hour: 31200.0,
+  lag_24_hours: 29800.0,
+  lag_7_days: 32100.0,
+  rolling_mean_24h: 30500.0,
+  rolling_mean_7d: 31000.0,
+});
+    \end{lstlisting}
+    \item \textbf{Inference Results \& Statuses:} We use state variables like \texttt{prediction} (number or null), \texttt{loading} (boolean), and \texttt{error} (string) to manage UI feedback during asynchronous backend requests.
+    \item \textbf{Chat History State:} In \texttt{EnergyCopilot.tsx}, we use state to track the active dialog:
+    \begin{lstlisting}[language=JavaScript]
+const [messages, setMessages] = useState<Message[]>([
+  { role: 'assistant', text: "Hello! I'm your grid AI Co-Pilot..." }
+]);
+const [input, setInput] = useState('');
+    \end{lstlisting}
+\end{itemize}
+
+\subsection{Controlled Inputs and Shared Event Handlers}
+Instead of letting the DOM manage input values, React controls inputs by binding their \texttt{value} to state and listening for changes via \texttt{onChange}.
+We use a shared state updater function \texttt{handleChange} in \texttt{page.tsx} to update dynamic attributes inside our \texttt{formData} object:
+\begin{lstlisting}[language=JavaScript]
+const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const { name, value } = e.target;
+  setFormData(prev => ({
+    ...prev,
+    [name]: parseFloat(value) || 0,
+  }));
+};
+\end{lstlisting}
+This uses the spread operator (\texttt{...prev}) to preserve other fields while dynamically updating the field named in the input’s \texttt{name} property (using computer property syntax \texttt{[name]}).
+
+\subsection{Component Communication via Props}
+React uses a unidirectional data flow. Information is passed down from parent components to child components via \textbf{props} (properties).
+In our dashboard, the parent component (\texttt{EnergyDashboard} in \texttt{page.tsx}) passes the current state matrix down to the child component (\texttt{EnergyCopilot}) using:
+\begin{lstlisting}[language=XML]
+<EnergyCopilot 
+  currentMetrics={{
+    ...formData,
+    prediction_mw: prediction ?? undefined
+  }} 
+/>
+\end{lstlisting}
+When the user clicks ``Generate Demand Forecast'' and the parent state updates, the new values are automatically propagated to the Co-Pilot child component through props, keeping the LLM model aware of the active telemetry.
+
+\subsection{Asynchronous Data Fetching}
+To connect the frontend with the FastAPI backend, we use the browser's native \texttt{fetch} API inside async/await event handler functions (\texttt{handleSubmit} and \texttt{handleSendMessage}).
+Key points to explain:
+\begin{itemize}
+    \item \textbf{Method:} \texttt{POST} requests with a JSON body: \texttt{body: JSON.stringify(formData)}.
+    \item \textbf{Headers:} \texttt{'Content-Type': 'application/json'} to tell the FastAPI backend to parse it as JSON payload.
+    \item \textbf{Environment Variables:} The base URL is resolved dynamically: \texttt{process.env.NEXT\_PUBLIC\_API\_URL || 'http://localhost:8000'}.
+\end{itemize}
+
+\section{FastAPI Concepts (Back-End)}
+The backend is a high-performance Python web framework, configured in two contexts: a serverless-friendly wrapper in \href{file:///c:/Akhil/AI_Engineer/1stProject/app.py}{\texttt{app.py}} (with AWS Lambda/Mangum support) and a clean structured package in \href{file:///c:/Akhil/AI_Engineer/1stProject/src/main.py}{\texttt{src/main.py}} (using lifespan contexts).
+
+\subsection{Modern Lifespan Management}
+Instead of legacy startup and shutdown event handlers (\texttt{@app.on\_event("startup")}), modern FastAPI recommends using the \texttt{lifespan} context manager. This allows us to load resource-heavy assets (like our Random Forest pickle model \texttt{best\_model.pkl}) exactly once when the server boots, cache it in a global dictionary, and cleanly free memory upon shutdown:
+\begin{lstlisting}[language=Python]
+from contextlib import asynccontextmanager
+
+ml_models = {}
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Execute startup logic: Load model from file
+    if os.path.exists(MODEL_PATH):
+        ml_models["rf_model"] = joblib.load(MODEL_PATH)
+    yield  # Hand over control to FastAPI to process requests
+    # Execute shutdown logic: Clean memory cache
+    ml_models.clear()
+\end{lstlisting}
+
+\subsection{Data Validation with Pydantic V2}
+FastAPI uses Pydantic for request and response body data validation. When a request hits a path operation, FastAPI validates the incoming JSON against a Pydantic \texttt{BaseModel}:
+\begin{itemize}
+    \item Pydantic validates data types (e.g., converting text numbers to actual floats/ints).
+    \item It enforces bounds via \texttt{Field} parameters (e.g., \texttt{hour: int = Field(..., ge=0, le=23)} prevents illegal values like hour 25).
+    \item If validation fails, FastAPI automatically returns an HTTP \texttt{422 Unprocessable Entity} status code and detailed error messages, preventing corrupted data from reaching the ML prediction engine.
+\end{itemize}
+
+\subsection{CORS Middleware (Cross-Origin Resource Sharing)}
+Since the frontend server (running on, say, port 3000) and backend server (running on port 8000) have different origins, web browsers block communication by default under the Same-Origin Policy. To allow them to communicate, we configure FastAPI’s \texttt{CORSMiddleware}:
+\begin{lstlisting}[language=Python]
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # In production, lock this down to specific domains
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+\end{lstlisting}
+
+\subsection{Serverless Bridge (Mangum)}
+To deploy a FastAPI application to AWS Lambda (which is an event-driven serverless computing platform), we use \textbf{Mangum}. 
+Mangum acts as an adapter, translating incoming AWS API Gateway proxy events into standard ASGI (Asynchronous Server Gateway Interface) requests that FastAPI understands, and packaging FastAPI’s responses back into API Gateway events.
+\begin{lstlisting}[language=Python]
+from mangum import Mangum
+# ... FastAPI app configuration ...
+handler = Mangum(app) # Exposed handler name for AWS Lambda
+\end{lstlisting}
+
+\section{AWS CloudWatch Logging \& Telemetry}
+Monitoring and debugging are critical to Quality Management and operations at Siemens Energy. In \texttt{app.py}, we integrate \textbf{AWS CloudWatch} to collect application telemetry.
+
+\subsection{Boto3 Logging integration via Watchtower}
+We use \texttt{watchtower}, a log handler for Python's standard logging library that automatically pushes log entries to AWS CloudWatch Logs in the background using the AWS SDK for Python (\texttt{boto3}).
+\begin{lstlisting}[language=Python]
+import logging
+import watchtower
+import boto3
+
+logger = logging.getLogger("pjme-serverless-service")
+
+try:
+    cw_client = boto3.client('logs', region_name='ap-south-1')
+    logger.addHandler(watchtower.CloudWatchLogHandler(
+        log_group_name="PJME_Inference_Pipeline",
+        log_stream_name="Serverless_Lambda_Logs",
+        boto3_client=cw_client
+    ))
+except Exception as e:
+    # Safe fallback if AWS credentials are not present locally
+    logger.warning("CloudWatch binding skipped for local runtime context")
+\end{lstlisting}
+
+\subsection{Log Groups and Log Streams}
+In AWS CloudWatch:
+\begin{itemize}
+    \item \textbf{Log Group:} A logical grouping of logs sharing similar retention, access control, and monitoring settings. In our code, this is \texttt{"PJME\_Inference\_Pipeline"}.
+    \item \textbf{Log Stream:} A sequence of log events that share the same source (e.g., a specific container or Lambda execution container). In our code, this is \texttt{"Serverless\_Lambda\_Logs"}.
+\end{itemize}
+
+\subsection{Structured Telemetry Log Formatting}
+To allow easy filtering and metrics creation in the CloudWatch console, we write structured, descriptive logs:
+\begin{itemize}
+    \item On successful prediction: \texttt{logger.info(f"LAMBDA\_INFERENCE\_SUCCESS | Predicted\_Load: \{prediction\} MW")}
+    \item On server crash: \texttt{logger.error(f"LAMBDA\_INFERENCE\_CRASH | Error: \{str(e)\}")}
+    \item On successful LLM interaction: \texttt{logger.info("LAMBDA\_COPILOT\_SUCCESS | Bedrock responded...")}
+\end{itemize}
+This allows grid operators to create CloudWatch Metrics Filters to monitor metrics like inference failure rates or grid demand fluctuations.
+
+\section{AWS Bedrock Converse API}
+AWS Bedrock is a fully managed service that offers key foundation models from leading AI startups and Amazon via a single unified API. Our application integrates the \textbf{Bedrock Converse API} in \texttt{app.py}.
+
+\subsection{Why the Converse API?}
+The Converse API (\texttt{bedrock\_client.converse}) is a unified conversation API that provides a consistent interface across different LLMs (such as Anthropic Claude, Meta Llama, Google Gemma, etc.), simplifying developers' work by removing the need to manage model-specific input structures.
+
+\subsection{System Prompt Injection for Operational Context}
+To make the AI Co-Pilot understand the grid dashboard context, we construct a \textbf{System Prompt} that contains current telemetry variables (such as live machine learning demand forecast, operating hour, lags, and rolling averages) and inject it into the request:
+\begin{lstlisting}[language=Python]
+system_prompt = f"""
+You are an expert Power Grid AI Co-Pilot analyzing regional energy load metrics.
+The current live system metrics from the dashboard are:
+- Current Machine Learning Demand Forecast: {data.current_prediction:.2f} MW
+- Operating Hour: {data.hour}:00
+...
+"""
+\end{lstlisting}
+This system prompt is sent as the \texttt{system} parameter in the \texttt{converse} method:
+\begin{lstlisting}[language=Python]
+response = bedrock_client.converse(
+    modelId="google.gemma-3-4b-it",
+    messages=bedrock_messages,
+    system=[{"text": system_prompt}],
+    inferenceConfig={"maxTokens": 300, "temperature": 0.3}
+)
+\end{lstlisting}
+
+\subsection{Structuring Chat History}
+The Converse API requires the \texttt{messages} parameter to follow a strict structure: an array of objects containing a \texttt{role} (\texttt{"user"} or \texttt{"assistant"}) and a \texttt{content} array containing a \texttt{text} element:
+\begin{lstlisting}[language=Python]
+# In app.py:
+bedrock_messages = []
+for msg in data.chat_history:
+    role = msg.get("role")
+    text = msg.get("text") or msg.get("content") or ""
+    if role in ("user", "assistant") and text:
+        bedrock_messages.append({
+            "role": role,
+            "content": [{"text": text}]
+        })
+\end{lstlisting}
+To ensure the Converse API doesn't throw a validation exception, we also clean the history by making sure the conversation begins with a \texttt{"user"} message, stripping out any leading assistant messages:
+\begin{lstlisting}[language=Python]
+while bedrock_messages and bedrock_messages[0]["role"] == "assistant":
+    bedrock_messages.pop(0)
+\end{lstlisting}
+
+\subsection{Inference Configuration Parameters}
+\begin{itemize}
+    \item \textbf{modelId:} The model identifier, in this case, \texttt{"google.gemma-3-4b-it"}.
+    \item \textbf{maxTokens:} Limits the response length to avoid excessive latency or cost (set to 300).
+    \item \textbf{temperature:} Controls randomness. A lower value (0.3) makes responses more deterministic, factual, and aligned with the provided telemetry.
+\end{itemize}
+
+\newpage
+\section{Interview Preparation Questions \& Model Answers}
+
+\subsection{React \& Frontend Questions}
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Question: What is the purpose of the \texttt{'use client'} directive in Next.js, and why was it necessary for your dashboard?}
+    \\ \textbf{Model Answer:} Under Next.js's App Router, all files in the \texttt{app} directory are treated as Server Components by default. Server Components are pre-rendered on the server and do not support client-side interactivity, state management, or browser APIs. Because our dashboard uses interactive elements like text inputs, a submit button, and dynamically handles states like \texttt{prediction}, \texttt{loading}, and \texttt{error} using hooks like \texttt{useState}, we must specify \texttt{'use client'} at the top of \texttt{page.tsx} and \texttt{EnergyCopilot.tsx}. This tells Next.js to deliver Javascript to the client browser to handle dynamic DOM updates and fetch API communication.
+
+    \item \textbf{Question: How do you handle form submission in your dashboard without refreshing the page?}
+    \\ \textbf{Model Answer:} In the \texttt{handleSubmit} function, we receive the form submission event and immediately call \texttt{e.preventDefault()}. This stops the browser's default behavior, which is to reload the page and perform a standard HTTP GET/POST form submission. Instead, we manually trigger an asynchronous JavaScript network request using the \texttt{fetch} API to send the payload to our FastAPI endpoint, enabling a smooth, single-page application (SPA) experience.
+
+    \item \textbf{Question: How does the \texttt{EnergyCopilot} component receive current telemetry data from the main dashboard, and what happens when that data changes?}
+    \\ \textbf{Model Answer:} The main \texttt{EnergyDashboard} parent component manages the state of the form inputs (\texttt{formData}) and the server's response (\texttt{prediction}). It passes this information down as props to the child component \texttt{EnergyCopilot} via the prop named \texttt{currentMetrics}. In React, when the state of a parent component changes, the component is re-rendered, and the updated state is passed down to children. This causes the child component to re-render with the new props, ensuring that the Grid Co-Pilot always receives the most up-to-date telemetry when querying the Bedrock Converse API.
+
+    \item \textbf{Question: Explain the state updater code: \texttt{setFormData(prev => (\{ ...prev, [name]: parseFloat(value) || 0 \}))}. Why do we use the spread operator?}
+    \\ \textbf{Model Answer:} In React, state should be treated as immutable. We must never modify the state object directly (e.g., \texttt{formData.hour = value}). Instead, we use \texttt{setFormData} and pass a callback function that receives the previous state (\texttt{prev}). 
+    We use the ES6 spread operator (\texttt{...prev}) to create a shallow copy of the existing fields in the state object. Then, we use computed property names (\texttt{[name]}) to overwrite only the specific input field that changed, casting it to a float with \texttt{parseFloat}. This ensures we don't accidentally erase the other 11 metrics inside the state object during an edit.
+\end{enumerate}
+
+\subsection{FastAPI \& Backend Questions}
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Question: Why did you choose FastAPI over Flask for this application, and what are its key features?}
+    \\ \textbf{Model Answer:} While Flask is a great minimalist framework, FastAPI offers key advantages for modern AI applications:
+    \begin{itemize}
+        \item \textbf{Automatic Data Validation:} It integrates with Pydantic to validate and type-cast inputs, preventing errors prior to running machine learning inferences.
+        \item \textbf{Asynchronous Execution:} FastAPI is built on ASGI and supports asynchronous request handling (\texttt{async/await}), which is beneficial when waiting for external network calls like the AWS Bedrock Converse API.
+        \item \textbf{Interactive Documentation:} It automatically generates interactive OpenAPI/Swagger documentation at \texttt{/docs}, making it easy for frontend developers and QA engineers to test endpoints.
+    \end{itemize}
+
+    \item \textbf{Question: How is the Machine Learning model loaded in the FastAPI app, and how do you ensure server performance is optimized?}
+    \\ \textbf{Model Answer:} In \texttt{src/main.py}, we utilize FastAPI’s \texttt{lifespan} context manager. This runs a startup block when the server boots, loading our Random Forest model from disk into the global dictionary \texttt{ml\_models} using \texttt{joblib.load()}. 
+    This is highly optimized because the heavy model file is loaded into RAM exactly once at startup. If we loaded the model inside the \texttt{/predict} route handler, every single incoming API request would force the server to read the model file from disk and parse it, creating severe performance bottlenecks, high latency, and memory leaks.
+
+    \item \textbf{Question: What happens if a frontend client sends invalid data to your \texttt{/predict} endpoint? How does FastAPI handle it?}
+    \\ \textbf{Model Answer:} FastAPI utilizes Pydantic validation schemas (e.g., \texttt{EnergyPredictionRequest}). If the request payload contains invalid values (e.g., a string instead of a float for \texttt{lag\_1\_hour}, or a number like 28 for \texttt{hour} where we specified \texttt{le=23}), Pydantic catches it. FastAPI will automatically intercept the request and return an HTTP \texttt{422 Unprocessable Entity} status code along with a structured JSON describing which field failed validation. The execution never reaches our machine learning code, protecting the ML model from invalid inputs.
+\end{enumerate}
+
+\subsection{AWS CloudWatch Questions}
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Question: How do you capture and push server logs to AWS CloudWatch from a Python environment?}
+    \\ \textbf{Model Answer:} In \texttt{app.py}, we instantiate a standard Python logging object and retrieve an AWS logs client using the AWS SDK for Python (\texttt{boto3.client('logs')}). We then attach a \texttt{CloudWatchLogHandler} from the \texttt{watchtower} package to our logger. This handler runs asynchronously, buffering log lines and dispatching them to our specified AWS CloudWatch Log Group (\texttt{"PJME\_Inference\_Pipeline"}) and Log Stream (\texttt{"Serverless\_Lambda\_Logs"}). If running locally without AWS credentials, a try-catch block catches the initialization error and falls back to standard local stdout logging.
+
+    \item \textbf{Question: How would you use CloudWatch logs to troubleshoot an issue where users report that predictions are failing?}
+    \\ \textbf{Model Answer:} In our application, we have structured telemetry outputs. Every prediction crash is logged as \texttt{LAMBDA\_INFERENCE\_CRASH | Error: [message]} under the log level \texttt{ERROR}. I would:
+    \begin{enumerate}
+        \item Open the AWS CloudWatch Console, navigate to Log Groups, and select \texttt{PJME\_Inference\_Pipeline}.
+        \item Open the \texttt{Serverless\_Lambda\_Logs} log stream.
+        \item Use the filter bar to search for terms like \texttt{"ERROR"} or \texttt{"LAMBDA\_INFERENCE\_CRASH"}.
+        \item Inspect the traceback logged alongside the crash message to identify if it was a data discrepancy, a file missing error, or a runtime failure in our Random Forest model.
+    \end{enumerate}
+
+    \item \textbf{Question: What are CloudWatch Metric Filters, and how could they be useful for a Quality Management team at Siemens Energy?}
+    \\ \textbf{Model Answer:} CloudWatch Metric Filters allow you to define patterns (like search terms or regular expressions) in your logs and convert them into numerical metrics. For instance, we could create a metric filter searching for \texttt{"LAMBDA\_INFERENCE\_CRASH"} in the log group. Every time a crash log is encountered, CloudWatch increments the metric. We can then set up a CloudWatch Alarm that triggers a notification (via Amazon SNS) to the Quality Management and engineering teams if the failure rate exceeds 1\% of requests, allowing us to maintain high system reliability.
+\end{enumerate}
+
+\subsection{AWS Bedrock \& LLM Questions}
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Question: What is the AWS Bedrock Converse API, and what benefits does it provide compared to legacy Bedrock APIs?}
+    \\ \textbf{Model Answer:} The Bedrock Converse API (\texttt{converse} method) is a unified conversation interface that standardizes the input and output parameters for multiple foundation models (such as Claude, Llama, and Gemma). In legacy APIs, each model provider had a different JSON schema for prompts and inference parameters (e.g., Anthropic expected different structures compared to Cohere or Meta). The Converse API provides a single, consistent structure for messages, system prompts, and configuration, allowing us to swap the underlying model (e.g., swapping from Gemma to Claude) with minimal code changes.
+
+    \item \textbf{Question: How do you supply real-time dashboard data to the AI Co-Pilot model, and how does it affect the accuracy of the model's responses?}
+    \\ \textbf{Model Answer:} We use a technique called system prompt engineering. When the user sends a message, our FastAPI server intercepts it and reads the current dashboard metrics (like the current ML forecast, lag variables, and date details). We dynamically insert these metrics into a detailed text block (the System Prompt). This system prompt is passed to the Bedrock Converse API alongside the chat history. By providing these specific metrics in the prompt, we ground the LLM in real-world facts. This dramatically reduces model hallucination and allows the assistant to answer questions like ``Is the current forecast higher than last week's rolling average?'' with exact, numbers-driven answers.
+
+    \item \textbf{Question: Why do we clean the chat history state before sending it to the Bedrock API, specifically stripping leading assistant messages?}
+    \\ \textbf{Model Answer:} The Bedrock Converse API enforces validation rules to ensure conversational consistency. A primary rule is that a conversation must begin with a \texttt{"user"} message. In our frontend UI, we initialize the chat history with a welcoming message from the assistant: \texttt{\{ role: 'assistant', text: "Hello! I'm your grid AI Co-Pilot..." \}}. If we sent this list directly, Bedrock would reject it with a validation error. To prevent this, our backend has a cleaning loop:
+    \begin{lstlisting}[language=Python]
+while bedrock_messages and bedrock_messages[0]["role"] == "assistant":
+    bedrock_messages.pop(0)
+\end{lstlisting}
+    This removes the initial welcome message from the API request payload, ensuring the first message sent to Bedrock is always from the user.
+\end{enumerate}
+
+\subsection{System Architecture \& Integration Questions}
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Question: Can you explain the end-to-end flow of the application when a user requests a demand forecast and then asks the Co-Pilot a question?}
+    \\ \textbf{Model Answer:} The application follows a clean, decoupled architecture:
+    \begin{enumerate}
+        \item \textbf{Forecasting Flow:} The user enters metrics on our React frontend and clicks ``Generate Demand Forecast''. React intercepts the event, calls \texttt{e.preventDefault()}, and dispatches an asynchronous \texttt{POST} request to the FastAPI \texttt{/predict} endpoint. The FastAPI server validates the payload using Pydantic, passes the data into our loaded Random Forest model, returns the forecast (in Megawatts), and logs the event to AWS CloudWatch.
+        \item \textbf{Dashboard Update:} React receives the successful forecast, updates its local \texttt{prediction} state, and triggers a re-render. This passes the new forecast and input metrics as props to the \texttt{EnergyCopilot} component.
+        \item \textbf{Co-Pilot Conversation Flow:} When the user types a question in the Co-Pilot chat, React updates the local message history and sends a request to the backend \texttt{/copilot} endpoint. The backend packages the chat history, constructs a system prompt injected with the latest grid telemetry metrics, and forwards it to AWS Bedrock Converse API using Gemma-3. The response is sent back to the React UI, which updates the messages state to display the assistant's response.
+    \end{enumerate}
+
+    \item \textbf{Question: What is Serverless Computing, and how does your backend fit into a serverless infrastructure?}
+    \\ \textbf{Model Answer:} Serverless computing is a cloud execution model where the cloud provider dynamically manages the allocation and provisioning of servers. Developers do not need to manage virtual machines or operating systems. 
+    Our FastAPI backend uses \textbf{Mangum} as an adapter. This allows the application to be deployed as an AWS Lambda function behind Amazon API Gateway. When an HTTP request comes in, API Gateway triggers our Lambda function, Mangum translates the event to ASGI, FastAPI processes the route, and Mangum returns the output. We only pay for the execution time of the request, eliminating the cost of keeping an idle server running 24/7.
+\end{enumerate}
+
+\end{document}
