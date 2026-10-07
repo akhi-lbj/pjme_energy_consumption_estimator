@@ -10,6 +10,7 @@ import watchtower
 import boto3
 import urllib.request
 import json
+import datetime
 
 # 1. Logging and Monitoring Configuration
 logging.basicConfig(level=logging.INFO)
@@ -32,7 +33,7 @@ except Exception as e:
     logger.warning(f"Bedrock runtime binding skipped: {e}")
 
 
-# 2. Live Weather Tool (Open-Meteo API for PJM East Region)
+# 2. Meteorological Tools (Open-Meteo Live & Historical Archive APIs)
 def get_live_weather(lat: float = 39.95, lon: float = -75.16) -> dict:
     """
     Fetches real-time live meteorological telemetry for grid coordinates (default: PJM East / Philadelphia, PA).
@@ -59,7 +60,7 @@ def get_live_weather(lat: float = 39.95, lon: float = -75.16) -> dict:
 
         return {
             "status": "success",
-            "region": "PJM East (Philadelphia Metropolitan Zone)",
+            "region": "PJM East (Live Current Telemetry)",
             "latitude": lat,
             "longitude": lon,
             "temperature_celsius": temp_c,
@@ -85,6 +86,68 @@ def get_live_weather(lat: float = 39.95, lon: float = -75.16) -> dict:
         }
 
 
+def get_historical_weather(date_str: str = "2016-01-04", hour: int = 18, lat: float = 39.95, lon: float = -75.16) -> dict:
+    """
+    Fetches historical meteorological archive data for a specific date and hour (default: PJM East / Philadelphia, PA).
+    API: Open-Meteo Historical Weather Archive API (1940-present, open-access, zero-key).
+    Purpose: Compares historical temperature baselines against current weather to identify temperature-driven anomalies.
+    """
+    try:
+        url = (
+            f"https://archive-api.open-meteo.com/v1/archive?"
+            f"latitude={lat}&longitude={lon}&start_date={date_str}&end_date={date_str}&"
+            f"hourly=temperature_2m,relative_humidity_2m,apparent_temperature,wind_speed_10m"
+        )
+        req = urllib.request.Request(url, headers={"User-Agent": "PJME-Energy-Forecaster/1.0"})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            raw_data = json.loads(resp.read().decode("utf-8"))
+
+        hourly = raw_data.get("hourly", {})
+        temps = hourly.get("temperature_2m", [])
+        feels = hourly.get("apparent_temperature", [])
+        humidities = hourly.get("relative_humidity_2m", [])
+        winds = hourly.get("wind_speed_10m", [])
+
+        safe_hour = max(0, min(23, hour))
+        temp_c = temps[safe_hour] if len(temps) > safe_hour else 1.0
+        feels_c = feels[safe_hour] if len(feels) > safe_hour else temp_c
+        temp_f = round(temp_c * 9 / 5 + 32, 1)
+        feels_f = round(feels_c * 9 / 5 + 32, 1)
+        humidity = humidities[safe_hour] if len(humidities) > safe_hour else 35
+        wind_kmh = winds[safe_hour] if len(winds) > safe_hour else 15.0
+
+        return {
+            "status": "success",
+            "region": "PJM East (Historical Weather Archive)",
+            "target_date": date_str,
+            "target_hour": f"{safe_hour}:00",
+            "latitude": lat,
+            "longitude": lon,
+            "temperature_celsius": temp_c,
+            "temperature_fahrenheit": temp_f,
+            "feels_like_celsius": feels_c,
+            "feels_like_fahrenheit": feels_f,
+            "relative_humidity_percent": humidity,
+            "wind_speed_kmh": wind_kmh
+        }
+    except Exception as e:
+        logger.warning(f"Historical weather lookup fallback triggered: {e}")
+        return {
+            "status": "fallback",
+            "region": "PJM East (Historical Baseline Estimate)",
+            "target_date": date_str,
+            "target_hour": f"{hour}:00",
+            "latitude": lat,
+            "longitude": lon,
+            "temperature_celsius": 1.0,
+            "temperature_fahrenheit": 33.8,
+            "feels_like_celsius": 1.0,
+            "feels_like_fahrenheit": 33.8,
+            "relative_humidity_percent": 34.0,
+            "wind_speed_kmh": 15.0
+        }
+
+
 # 3. Initialize FastAPI App
 app = FastAPI(title="PJME Serverless Energy API")
 
@@ -98,7 +161,7 @@ class EnergyPredictionRequest(BaseModel):
     dayofweek: int = Field(..., ge=0, le=6, description="Day of the week (0-6)")
     quarter: int = Field(..., ge=1, le=4, description="Quarter of the year (1-4)")
     month: int = Field(..., ge=1, le=12, description="Month of the year (1-12)")
-    year: int = Field(..., description="Calendar year (e.g., 2026)")
+    year: int = Field(..., description="Calendar year (e.g., 2016)")
     dayofyear: int = Field(..., ge=1, le=366, description="Day of the year (1-366)")
     is_weekend: int = Field(..., ge=0, le=1, description="1 if weekend else 0")
 
@@ -141,6 +204,11 @@ def weather_endpoint(lat: float = 39.95, lon: float = -75.16):
     """Direct endpoint to verify get_live_weather tool telemetry."""
     return get_live_weather(lat, lon)
 
+@app.get("/weather/historical")
+def historical_weather_endpoint(date: str = "2016-01-04", hour: int = 18, lat: float = 39.95, lon: float = -75.16):
+    """Direct endpoint to verify get_historical_weather tool telemetry."""
+    return get_historical_weather(date_str=date, hour=hour, lat=lat, lon=lon)
+
 @app.post("/predict")
 def predict_energy(payload: EnergyPredictionRequest, request: Request):
     try:
@@ -166,21 +234,25 @@ def predict_energy(payload: EnergyPredictionRequest, request: Request):
 
 @app.post("/copilot")
 async def energy_copilot(data: CopilotRequest):
-    # Fetch live meteorological telemetry for PJM East (Tool: get_live_weather)
-    weather = get_live_weather()
+    # Derive calendar date string from target telemetry matrix
+    try:
+        target_date = datetime.date(data.year, 1, 1) + datetime.timedelta(days=max(0, data.dayofyear - 1))
+        date_str = target_date.strftime("%Y-%m-%d")
+    except Exception:
+        date_str = "2016-01-04"
 
-    # System prompt provides rich operational and meteorological context for the LLM
+    # Automatically execute both live and historical weather tools
+    live_weather = get_live_weather()
+    historical_weather = get_historical_weather(date_str=date_str, hour=data.hour)
+
+    # System prompt provides rich operational and dual-meteorological context for the LLM
     system_prompt = f"""
     You are an expert Power Grid AI Co-Pilot analyzing regional energy load metrics for PJM East (PJME).
     
     Live Grid Telemetry:
     - Current Machine Learning Demand Forecast: {data.current_prediction:.2f} MW
     - Operating Hour: {data.hour}:00
-    - Day of Week index: {data.dayofweek} (0=Monday, 6=Sunday)
-    - Quarter: {data.quarter}
-    - Month of Year: {data.month}
-    - Calendar Year: {data.year}
-    - Day of Year: {data.dayofyear}
+    - Historical Target Date: {date_str} (Day of Year: {data.dayofyear}, Day of Week Index: {data.dayofweek}, Quarter: {data.quarter}, Month: {data.month})
     - Is Weekend: {'Yes' if data.is_weekend == 1 else 'No'}
     - Lag Load (1 Hour Ago): {data.lag_1_hour:.2f} MW
     - Lag Load (24 Hours Ago): {data.lag_24_hours:.2f} MW
@@ -188,22 +260,28 @@ async def energy_copilot(data: CopilotRequest):
     - Rolling Mean (24 Hours): {data.rolling_mean_24h:.2f} MW
     - Rolling Mean (7 Days): {data.rolling_mean_7d:.2f} MW
 
-    Live Meteorological Telemetry (Tool: get_live_weather):
-    - Substation Region: {weather['region']} (Lat: {weather['latitude']}, Lon: {weather['longitude']})
-    - Real-Time Ambient Temperature: {weather['temperature_celsius']}°C ({weather['temperature_fahrenheit']}°F)
-    - Heat Index / Feels Like: {weather['feels_like_celsius']}°C ({weather['feels_like_fahrenheit']}°F)
-    - Relative Humidity: {weather['relative_humidity_percent']}%
-    - Wind Speed: {weather['wind_speed_kmh']} km/h
+    Meteorological Telemetry (Tools Executed Automatically):
+    1. Historical Weather on Target Date ({date_str} at {data.hour}:00 via Tool: get_historical_weather):
+       - Ambient Temperature: {historical_weather['temperature_celsius']}°C ({historical_weather['temperature_fahrenheit']}°F)
+       - Feels Like: {historical_weather['feels_like_celsius']}°C ({historical_weather['feels_like_fahrenheit']}°F)
+       - Relative Humidity: {historical_weather['relative_humidity_percent']}%
+       - Wind Speed: {historical_weather['wind_speed_kmh']} km/h
+
+    2. Real-Time Live Weather in PJM East Today (via Tool: get_live_weather):
+       - Ambient Temperature: {live_weather['temperature_celsius']}°C ({live_weather['temperature_fahrenheit']}°F)
+       - Heat Index / Feels Like: {live_weather['feels_like_celsius']}°C ({live_weather['feels_like_fahrenheit']}°F)
+       - Relative Humidity: {live_weather['relative_humidity_percent']}%
+       - Wind Speed: {live_weather['wind_speed_kmh']} km/h
     
     Operational Guidelines:
-    - Correlate meteorological conditions with grid load:
-      * High temperatures (>30°C / 86°F) drive heavy air conditioning cooling load surges.
-      * Extreme cold (<5°C / 41°F) drives severe resistive and heat-pump heating spikes.
-      * High humidity amplifies perceived heat index and cooling compressor duty cycles.
-    - Provide concise, technically rigorous grid operational insights responding directly to the user's query.
-    - Contextualize the live numbers, weather readings, and historical lags naturally.
-    - Use clean Markdown formatting: bold highlights (**keyword**), bullet points, and Markdown tables when comparing metrics or scenarios.
-    - Always finish your answer with a complete thought and a bolded actionable operational recommendation. Never trail off or leave thoughts incomplete.
+    - Synthesize all grid telemetry, historical weather, and live weather into a cohesive, professional analysis.
+    - DO NOT output pseudo-code or state that you are retrieving tool data (the tools have already executed and their readings are provided above).
+    - Compare historical weather vs live weather to explain the thermal driver behind current demand:
+      * Cold winter conditions (<5°C / 41°F) create heavy heating load.
+      * High summer heat (>30°C / 86°F) create severe air conditioning cooling spikes.
+      * Large temperature differences explain why load might diverge from historical baselines.
+    - Include a clean Markdown comparison table comparing Historical vs Current conditions.
+    - MANDATORY REQUIREMENT: You MUST ALWAYS finish your response with a complete, fully formed '**Actionable Operational Recommendation:**' including specific Megawatt (MW) dispatch guidance (e.g. ramp up/down generation, dispatch peakers, or activate demand response). Never stop mid-thought or leave sentences incomplete.
     """
     
     try:
@@ -226,27 +304,37 @@ async def energy_copilot(data: CopilotRequest):
         if not bedrock_messages:
             return {"status": "error", "message": "No valid messages in chat history."}
 
-        # Invocation using Google Gemma 3 12B in ap-south-1
+        # Invocation using Google Gemma 3 12B in ap-south-1 with expanded maxTokens
         response = bedrock_client.converse(
             modelId="google.gemma-3-12b-it",
             messages=bedrock_messages,
             system=[{"text": system_prompt}],
-            inferenceConfig={"maxTokens": 1024, "temperature": 0.3}
+            inferenceConfig={"maxTokens": 2048, "temperature": 0.3}
         )
         
         stop_reason = response.get("stopReason", "end_turn")
         ai_response = response["output"]["message"]["content"][0]["text"]
         logger.info(f"LAMBDA_COPILOT_SUCCESS | Bedrock responded | stopReason={stop_reason}")
 
-        # Active tool call telemetry for frontend inspector
+        # Active tool call telemetry for frontend inspector (both live & historical)
         tool_calls = [
             {
                 "name": "get_live_weather",
                 "input": {
-                    "latitude": weather.get("latitude", 39.95),
-                    "longitude": weather.get("longitude", -75.16)
+                    "latitude": live_weather.get("latitude", 39.95),
+                    "longitude": live_weather.get("longitude", -75.16)
                 },
-                "output": weather
+                "output": live_weather
+            },
+            {
+                "name": "get_historical_weather",
+                "input": {
+                    "date": date_str,
+                    "hour": data.hour,
+                    "latitude": historical_weather.get("latitude", 39.95),
+                    "longitude": historical_weather.get("longitude", -75.16)
+                },
+                "output": historical_weather
             }
         ]
 

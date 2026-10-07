@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 from src.main import app
-from app import get_live_weather
+from app import get_live_weather, get_historical_weather
 
 def test_predict_success():
     # 'with' forces FastAPI to trigger the lifespan startup logic cleanly before testing
@@ -44,3 +44,10 @@ def test_live_weather_tool():
     assert "temperature_celsius" in weather
     assert "temperature_fahrenheit" in weather
     assert "relative_humidity_percent" in weather
+
+def test_historical_weather_tool():
+    weather = get_historical_weather(date_str="2016-01-04", hour=18, lat=39.95, lon=-75.16)
+    assert weather["status"] in ("success", "fallback")
+    assert "temperature_celsius" in weather
+    assert "temperature_fahrenheit" in weather
+    assert "target_date" in weather
