@@ -79,15 +79,15 @@ export default function EnergyDashboard() {
           </div>
           <div className="flex items-center gap-2.5 text-xs sm:text-sm font-mono text-emerald-400 bg-emerald-950/70 border border-emerald-800/80 px-4 py-2.5 rounded-full w-fit shadow-inner">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
-            System Online &bull; AWS Lambda / Bedrock
+            System Online &bull; AWS Lambda / Grid Agent
           </div>
         </header>
 
-        <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 items-stretch">
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 items-start">
           
           {/* Left Column: Input Form (5 cols on XL) */}
           <div className="xl:col-span-5 flex flex-col">
-            <form onSubmit={handleSubmit} className="bg-slate-900 border border-slate-800 p-7 sm:p-8 rounded-2xl shadow-2xl flex flex-col justify-between h-full space-y-6">
+            <form onSubmit={handleSubmit} className="bg-slate-900 border border-slate-800 p-7 sm:p-8 rounded-2xl shadow-2xl flex flex-col justify-between h-full xl:min-h-[760px] space-y-6">
               <div>
                 <div className="border-b border-slate-800 pb-4 mb-6">
                   <h2 className="text-2xl font-bold text-slate-100">Input Metric Matrix</h2>
@@ -126,7 +126,7 @@ export default function EnergyDashboard() {
 
           {/* Middle Column: Inference Output (3 cols on XL) */}
           <div className="xl:col-span-3 flex flex-col">
-            <div className="bg-slate-900 border border-slate-800 p-7 sm:p-8 rounded-2xl shadow-2xl flex flex-col justify-between h-full min-h-[580px] xl:min-h-[640px]">
+            <div className="bg-slate-900 border border-slate-800 p-7 sm:p-8 rounded-2xl shadow-2xl flex flex-col justify-between h-full min-h-[580px] xl:h-[760px] xl:max-h-[760px]">
               <div>
                 <h2 className="text-2xl font-bold text-slate-100 mb-2">Inference Output</h2>
                 <p className="text-sm text-slate-300 leading-relaxed">
@@ -169,8 +169,8 @@ export default function EnergyDashboard() {
             </div>
           </div>
 
-          {/* Right Column: AWS Bedrock Co-Pilot (4 cols on XL) */}
-          <div className="xl:col-span-4 flex flex-col">
+          {/* Right Column: Grid Agent (4 cols on XL) */}
+          <div className="xl:col-span-4 flex flex-col min-h-0">
             <EnergyCopilot 
               currentMetrics={{
                 ...formData,

@@ -28,3 +28,29 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #10b981;
 }
+
+/* High-contrast, custom emerald scrollbar for Grid Agent */
+.agent-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #10b981 #090d16;
+}
+
+.agent-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.agent-scrollbar::-webkit-scrollbar-track {
+  background: #090d16;
+  border-radius: 8px;
+}
+
+.agent-scrollbar::-webkit-scrollbar-thumb {
+  background: #059669;
+  border-radius: 8px;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.agent-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #10b981;
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.5);
+}

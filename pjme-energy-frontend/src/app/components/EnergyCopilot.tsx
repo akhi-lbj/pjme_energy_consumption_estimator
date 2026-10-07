@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -96,10 +96,15 @@ function ToolCallsBadge({ toolCalls }: { toolCalls?: ToolCall[] }) {
 
 export default function EnergyCopilot({ currentMetrics }: { currentMetrics: MetricProps }) {
     const [messages, setMessages] = useState<Message[]>([
-        { role: 'assistant', text: "Hello! I'm your grid AI Co-Pilot. Ask me anything about the current demand forecast or load trends." }
+        { role: 'assistant', text: "Hello! I'm your Grid Agent. Ask me anything about the current demand forecast, weather correlations, or load trends." }
     ]);
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
+    const messagesEndRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [messages, loading]);
 
     const handleSendMessage = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -154,15 +159,15 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
     };
 
     return (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-7 flex flex-col h-full min-h-[580px] xl:min-h-[640px] shadow-2xl text-white">
-            <div className="border-b border-slate-800 pb-4 mb-4">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-7 flex flex-col h-[640px] xl:h-[760px] max-h-[640px] xl:max-h-[760px] shadow-2xl text-white">
+            <div className="flex-shrink-0 border-b border-slate-800 pb-4 mb-4">
                 <h3 className="text-2xl font-bold text-emerald-400 flex items-center gap-2.5">
-                    <span>⚡</span> AWS Bedrock Grid Co-Pilot
+                    <span>⚡</span> Grid Agent
                 </h3>
-                <p className="text-sm text-slate-300 mt-1">Context-aware grid operational intelligence</p>
+                <p className="text-sm text-slate-300 mt-1">Autonomous grid intelligence & weather analytics</p>
             </div>
 
-            <div className="flex-1 overflow-y-auto space-y-4 mb-4 pr-1">
+            <div className="flex-1 min-h-0 overflow-y-auto space-y-4 mb-4 pr-2 agent-scrollbar">
                 {messages.map((msg, idx) => (
                     <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                         {msg.role === 'user' ? (
@@ -216,18 +221,19 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
                     <div className="flex justify-start">
                         <div className="bg-slate-800 text-slate-300 text-sm rounded-xl px-4 py-3 border border-slate-700/80 animate-pulse flex items-center gap-2">
                             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-                            Co-pilot is parsing grid state vectors & meteorological telemetry...
+                            Grid Agent is analyzing telemetry & meteorological vectors...
                         </div>
                     </div>
                 )}
+                <div ref={messagesEndRef} />
             </div>
 
-            <form onSubmit={handleSendMessage} className="flex gap-3 pt-2">
+            <form onSubmit={handleSendMessage} className="flex-shrink-0 flex gap-3 pt-2">
                 <input
                     type="text"
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
-                    placeholder="Ask about peak times, load changes, weather impacts..."
+                    placeholder="Ask Grid Agent about peak times, load changes, weather impacts..."
                     className="flex-1 bg-slate-950 border border-slate-700/80 rounded-xl px-4 py-3.5 text-base text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 placeholder-slate-400"
                     disabled={loading}
                 />
