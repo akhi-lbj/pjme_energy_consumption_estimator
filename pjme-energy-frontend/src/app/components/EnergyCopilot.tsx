@@ -24,9 +24,74 @@ interface MetricProps {
     rolling_mean_7d: number;  // Moving average over the last 7 days
 }
 
+interface ToolCall {
+    name: string;
+    input: Record<string, any>;
+    output: Record<string, any>;
+}
+
 interface Message {
     role: 'user' | 'assistant';
     text: string;
+    tool_calls?: ToolCall[];
+}
+
+function ToolCallsBadge({ toolCalls }: { toolCalls?: ToolCall[] }) {
+    const [expanded, setExpanded] = useState(false);
+
+    if (!toolCalls || toolCalls.length === 0) return null;
+
+    return (
+        <div className="mt-3 pt-2.5 border-t border-slate-700/60">
+            <button
+                type="button"
+                onClick={() => setExpanded(!expanded)}
+                className="flex items-center gap-2 px-2.5 py-1 rounded-md text-xs font-mono font-medium text-emerald-400 bg-slate-900/90 hover:bg-slate-950 border border-emerald-500/30 hover:border-emerald-500/70 transition-all cursor-pointer shadow-sm group select-none"
+            >
+                <span className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span>🛠️ Tool Calls ({toolCalls.length})</span>
+                </span>
+                <span className="text-[10px] text-slate-400 group-hover:text-emerald-300">
+                    {expanded ? '▲ Hide' : '▼ View Invocation'}
+                </span>
+            </button>
+
+            {expanded && (
+                <div className="mt-2.5 space-y-2">
+                    {toolCalls.map((tc, idx) => (
+                        <div key={idx} className="bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs font-mono space-y-2 shadow-inner">
+                            <div className="flex items-center justify-between text-emerald-300 font-semibold border-b border-slate-800/80 pb-1">
+                                <span className="flex items-center gap-1.5">
+                                    <span className="text-emerald-400">⚡</span>
+                                    <span>{tc.name}()</span>
+                                </span>
+                                <span className="text-[10px] text-slate-500 uppercase tracking-wider">Invocation #{idx + 1}</span>
+                            </div>
+                            
+                            <div>
+                                <span className="text-slate-400 text-[10px] uppercase font-semibold tracking-wider block mb-1">
+                                    Tool Input Parameters:
+                                </span>
+                                <pre className="bg-slate-900 text-slate-300 p-2 rounded border border-slate-800 overflow-x-auto text-[11px] leading-tight">
+                                    {JSON.stringify(tc.input, null, 2)}
+                                </pre>
+                            </div>
+
+                            <div>
+                                <span className="text-emerald-400 text-[10px] uppercase font-semibold tracking-wider block mb-1">
+                                    Tool Output / Telemetry:
+                                </span>
+                                <pre className="bg-slate-900 text-emerald-300 p-2 rounded border border-slate-800 overflow-x-auto text-[11px] leading-tight">
+                                    {JSON.stringify(tc.output, null, 2)}
+                                </pre>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
 }
 
 export default function EnergyCopilot({ currentMetrics }: { currentMetrics: MetricProps }) {
@@ -73,7 +138,11 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
             const data = await response.json();
 
             if (data.status === 'success') {
-                setMessages(prev => [...prev, { role: 'assistant', text: data.response }]);
+                setMessages(prev => [...prev, { 
+                    role: 'assistant', 
+                    text: data.response,
+                    tool_calls: data.tool_calls || []
+                }]);
             } else {
                 setMessages(prev => [...prev, { role: 'assistant', text: `Glitch: ${data.message}` }]);
             }
@@ -136,6 +205,9 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
                                 >
                                     {msg.text}
                                 </ReactMarkdown>
+
+                                {/* Interactive Tool Calls Component */}
+                                <ToolCallsBadge toolCalls={msg.tool_calls} />
                             </div>
                         )}
                     </div>
@@ -144,7 +216,7 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
                     <div className="flex justify-start">
                         <div className="bg-slate-800 text-slate-300 text-sm rounded-xl px-4 py-3 border border-slate-700/80 animate-pulse flex items-center gap-2">
                             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-                            Co-pilot is parsing grid state vectors...
+                            Co-pilot is parsing grid state vectors & meteorological telemetry...
                         </div>
                     </div>
                 )}
@@ -155,7 +227,7 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
                     type="text"
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
-                    placeholder="Ask about peak times, load changes..."
+                    placeholder="Ask about peak times, load changes, weather impacts..."
                     className="flex-1 bg-slate-950 border border-slate-700/80 rounded-xl px-4 py-3.5 text-base text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 placeholder-slate-400"
                     disabled={loading}
                 />

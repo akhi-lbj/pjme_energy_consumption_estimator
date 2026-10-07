@@ -237,7 +237,24 @@ async def energy_copilot(data: CopilotRequest):
         stop_reason = response.get("stopReason", "end_turn")
         ai_response = response["output"]["message"]["content"][0]["text"]
         logger.info(f"LAMBDA_COPILOT_SUCCESS | Bedrock responded | stopReason={stop_reason}")
-        return {"response": ai_response, "status": "success"}
+
+        # Active tool call telemetry for frontend inspector
+        tool_calls = [
+            {
+                "name": "get_live_weather",
+                "input": {
+                    "latitude": weather.get("latitude", 39.95),
+                    "longitude": weather.get("longitude", -75.16)
+                },
+                "output": weather
+            }
+        ]
+
+        return {
+            "response": ai_response,
+            "status": "success",
+            "tool_calls": tool_calls
+        }
         
     except Exception as e:
         logger.error(f"LAMBDA_COPILOT_CRASH | Error: {str(e)}")
