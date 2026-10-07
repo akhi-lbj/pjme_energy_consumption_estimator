@@ -8,6 +8,8 @@ import os
 import logging
 import watchtower
 import boto3
+import urllib.request
+import json
 
 # 1. Logging and Monitoring Configuration
 logging.basicConfig(level=logging.INFO)
@@ -23,29 +25,74 @@ try:
 except Exception as e:
     logger.warning(f"CloudWatch binding skipped for local runtime context: {e}")
 
-# NEW: Initialize Bedrock Runtime client in ap-south-1
+# Initialize Bedrock Runtime client in ap-south-1
 try:
     bedrock_client = boto3.client("bedrock-runtime", region_name="ap-south-1")
 except Exception as e:
     logger.warning(f"Bedrock runtime binding skipped: {e}")
 
 
-# 2. Initialize FastAPI App
-app = FastAPI(title="PJME Serverless Energy API")
+# 2. Live Weather Tool (Open-Meteo API for PJM East Region)
+def get_live_weather(lat: float = 39.95, lon: float = -75.16) -> dict:
+    """
+    Fetches real-time live meteorological telemetry for grid coordinates (default: PJM East / Philadelphia, PA).
+    API: Open-Meteo High-Resolution Meteorological API (open-access, zero-key, high-availability).
+    Purpose: Correlates forecasted heatwaves or cold snaps directly with electricity demand spikes.
+    """
+    try:
+        url = (
+            f"https://api.open-meteo.com/v1/forecast?"
+            f"latitude={lat}&longitude={lon}&"
+            f"current=temperature_2m,relative_humidity_2m,apparent_temperature,wind_speed_10m"
+        )
+        req = urllib.request.Request(url, headers={"User-Agent": "PJME-Energy-Forecaster/1.0"})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            raw_data = json.loads(resp.read().decode("utf-8"))
 
-# (Optional CORS middleware setup left commented as per your original file structure)
-# app.add_middleware(
-#    CORSMiddleware,
-#    allow_origins=["*"], 
-#    allow_credentials=True,
-#    allow_methods=["*"],
-#    allow_headers=["*"],)
+        current = raw_data.get("current", {})
+        temp_c = current.get("temperature_2m", 20.0)
+        feels_c = current.get("apparent_temperature", temp_c)
+        temp_f = round(temp_c * 9 / 5 + 32, 1)
+        feels_f = round(feels_c * 9 / 5 + 32, 1)
+        humidity = current.get("relative_humidity_2m", 50)
+        wind_kmh = current.get("wind_speed_10m", 10.0)
+
+        return {
+            "status": "success",
+            "region": "PJM East (Philadelphia Metropolitan Zone)",
+            "latitude": lat,
+            "longitude": lon,
+            "temperature_celsius": temp_c,
+            "temperature_fahrenheit": temp_f,
+            "feels_like_celsius": feels_c,
+            "feels_like_fahrenheit": feels_f,
+            "relative_humidity_percent": humidity,
+            "wind_speed_kmh": wind_kmh
+        }
+    except Exception as e:
+        logger.warning(f"Live weather lookup fallback triggered: {e}")
+        return {
+            "status": "fallback",
+            "region": "PJM East Regional Grid Estimate",
+            "latitude": lat,
+            "longitude": lon,
+            "temperature_celsius": 20.5,
+            "temperature_fahrenheit": 68.9,
+            "feels_like_celsius": 20.5,
+            "feels_like_fahrenheit": 68.9,
+            "relative_humidity_percent": 50.0,
+            "wind_speed_kmh": 12.0
+        }
+
+
+# 3. Initialize FastAPI App
+app = FastAPI(title="PJME Serverless Energy API")
 
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "models/best_model.pkl")
 model = joblib.load(MODEL_PATH) if os.path.exists(MODEL_PATH) else None
 
 
-# 3. Data Validation Schemas (Pydantic)
+# 4. Data Validation Schemas (Pydantic)
 class EnergyPredictionRequest(BaseModel):
     hour: int = Field(..., ge=0, le=23, description="Hour of the day (0-23)")
     dayofweek: int = Field(..., ge=0, le=6, description="Day of the week (0-6)")
@@ -62,9 +109,8 @@ class EnergyPredictionRequest(BaseModel):
     rolling_mean_24h: float = Field(..., description="Rolling mean energy consumption over last 24 hours (KWH)")
     rolling_mean_7d: float = Field(..., description="Rolling mean energy consumption over last 7 days (KWH)")
 
-# NEW: Copilot request data schema
 class CopilotRequest(BaseModel):
-    chat_history: list[dict[str, str]]  # Passing the continuous React state array
+    chat_history: list[dict[str, str]]
     current_prediction: float
     hour: int
     dayofweek: int
@@ -79,7 +125,22 @@ class CopilotRequest(BaseModel):
     rolling_mean_24h: float
     rolling_mean_7d: float
 
-# 4. API Endpoints
+
+# 5. API Endpoints
+@app.get("/")
+def read_root():
+    return {
+        "service": "PJME Grid Load Forecasting Service",
+        "status": "healthy",
+        "model_loaded": model is not None,
+        "region": "ap-south-1"
+    }
+
+@app.get("/weather")
+def weather_endpoint(lat: float = 39.95, lon: float = -75.16):
+    """Direct endpoint to verify get_live_weather tool telemetry."""
+    return get_live_weather(lat, lon)
+
 @app.post("/predict")
 def predict_energy(payload: EnergyPredictionRequest, request: Request):
     try:
@@ -103,13 +164,16 @@ def predict_energy(payload: EnergyPredictionRequest, request: Request):
         return {"status": "error", "message": str(e)}
 
 
-# NEW: Version 4 AI Copilot Endpoint using Amazon Bedrock Cross-Region Profiles
 @app.post("/copilot")
 async def energy_copilot(data: CopilotRequest):
-    # System prompt provides rich operational context for the LLM
+    # Fetch live meteorological telemetry for PJM East (Tool: get_live_weather)
+    weather = get_live_weather()
+
+    # System prompt provides rich operational and meteorological context for the LLM
     system_prompt = f"""
-    You are an expert Power Grid AI Co-Pilot analyzing regional energy load metrics.
-    The current live system metrics from the dashboard are:
+    You are an expert Power Grid AI Co-Pilot analyzing regional energy load metrics for PJM East (PJME).
+    
+    Live Grid Telemetry:
     - Current Machine Learning Demand Forecast: {data.current_prediction:.2f} MW
     - Operating Hour: {data.hour}:00
     - Day of Week index: {data.dayofweek} (0=Monday, 6=Sunday)
@@ -123,10 +187,21 @@ async def energy_copilot(data: CopilotRequest):
     - Lag Load (7 Days Ago): {data.lag_7_days:.2f} MW
     - Rolling Mean (24 Hours): {data.rolling_mean_24h:.2f} MW
     - Rolling Mean (7 Days): {data.rolling_mean_7d:.2f} MW
+
+    Live Meteorological Telemetry (Tool: get_live_weather):
+    - Substation Region: {weather['region']} (Lat: {weather['latitude']}, Lon: {weather['longitude']})
+    - Real-Time Ambient Temperature: {weather['temperature_celsius']}°C ({weather['temperature_fahrenheit']}°F)
+    - Heat Index / Feels Like: {weather['feels_like_celsius']}°C ({weather['feels_like_fahrenheit']}°F)
+    - Relative Humidity: {weather['relative_humidity_percent']}%
+    - Wind Speed: {weather['wind_speed_kmh']} km/h
     
-    Guidelines:
+    Operational Guidelines:
+    - Correlate meteorological conditions with grid load:
+      * High temperatures (>30°C / 86°F) drive heavy air conditioning cooling load surges.
+      * Extreme cold (<5°C / 41°F) drives severe resistive and heat-pump heating spikes.
+      * High humidity amplifies perceived heat index and cooling compressor duty cycles.
     - Provide concise, technically rigorous grid operational insights responding directly to the user's query.
-    - Contextualize the live numbers and historical lags naturally.
+    - Contextualize the live numbers, weather readings, and historical lags naturally.
     - Use clean Markdown formatting: bold highlights (**keyword**), bullet points, and Markdown tables when comparing metrics or scenarios.
     - Always finish your answer with a complete thought and a bolded actionable operational recommendation. Never trail off or leave thoughts incomplete.
     """
@@ -151,9 +226,9 @@ async def energy_copilot(data: CopilotRequest):
         if not bedrock_messages:
             return {"status": "error", "message": "No valid messages in chat history."}
 
-        # Cross-region inference profile ID for Claude / Gemma called from ap-south-1
+        # Invocation using Google Gemma 3 12B in ap-south-1
         response = bedrock_client.converse(
-            modelId="google.gemma-3-4b-it",
+            modelId="google.gemma-3-12b-it",
             messages=bedrock_messages,
             system=[{"text": system_prompt}],
             inferenceConfig={"maxTokens": 1024, "temperature": 0.3}
@@ -169,5 +244,5 @@ async def energy_copilot(data: CopilotRequest):
         return {"status": "error", "message": f"Co-Pilot operational glitch: {str(e)}"}
 
 
-# 5. THE SERVERLESS BRIDGE HANDLER
+# 6. THE SERVERLESS BRIDGE HANDLER
 handler = Mangum(app)

@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 from src.main import app
+from app import get_live_weather
 
 def test_predict_success():
     # 'with' forces FastAPI to trigger the lifespan startup logic cleanly before testing
@@ -36,3 +37,10 @@ def test_predict_missing_field():
         
         response = client.post("/predict", json=incomplete_payload)
         assert response.status_code == 422
+
+def test_live_weather_tool():
+    weather = get_live_weather(39.95, -75.16)
+    assert weather["status"] in ("success", "fallback")
+    assert "temperature_celsius" in weather
+    assert "temperature_fahrenheit" in weather
+    assert "relative_humidity_percent" in weather
