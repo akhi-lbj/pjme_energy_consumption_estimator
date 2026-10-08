@@ -293,19 +293,116 @@ async def energy_copilot(data: CopilotRequest):
     except Exception:
         date_str = f"{data.year:04d}-{max(1, min(12, data.month)):02d}-01"
 
-    # Automatically execute both live and historical weather tools using user input columns
-    live_weather = get_live_weather()
-    historical_weather = get_historical_weather(
-        year=data.year,
-        month=data.month,
-        dayofyear=data.dayofyear,
-        hour=data.hour,
-        date_str=date_str
-    )
+    # 1. Determine tool activation based on user instructions in chat history
+    latest_user_text = ""
+    for msg in reversed(data.chat_history):
+        if msg.get("role") == "user":
+            latest_user_text = (msg.get("text") or msg.get("content") or "").lower()
+            break
 
-    # System prompt provides rich operational and dual-meteorological context for the LLM
+    wants_no_live = any(phrase in latest_user_text for phrase in [
+        "dont give me the live", "don't give me the live",
+        "dont give me live", "don't give me live",
+        "dont use live", "don't use live",
+        "no live", "without live", "skip live", "exclude live",
+        "historical only", "only historical", "just historical", "just give me the historical",
+        "just historical weather", "only the historical", "dont show live", "don't show live"
+    ])
+
+    wants_no_historical = any(phrase in latest_user_text for phrase in [
+        "dont give me historical", "don't give me historical",
+        "no historical", "skip historical", "exclude historical",
+        "live only", "only live", "just live", "just give me the live",
+        "just live weather", "only the live"
+    ])
+
+    wants_no_tools = any(phrase in latest_user_text for phrase in [
+        "dont use any tools", "don't use any tools", "no tools", "without tools", "dont use tools", "don't use tools"
+    ])
+
+    if wants_no_tools:
+        include_live = False
+        include_historical = False
+    else:
+        include_live = not wants_no_live
+        include_historical = not wants_no_historical
+
+    # 2. Dynamically execute only the requested tools
+    live_weather = None
+    historical_weather = None
+    tool_calls = []
+
+    if include_historical:
+        historical_weather = get_historical_weather(
+            year=data.year,
+            month=data.month,
+            dayofyear=data.dayofyear,
+            hour=data.hour,
+            date_str=date_str
+        )
+        tool_calls.append({
+            "name": "get_historical_weather",
+            "input": {
+                "parsed_from_user_columns": {
+                    "year": data.year,
+                    "month": data.month,
+                    "dayofyear": data.dayofyear,
+                    "hour": data.hour
+                },
+                "derived_target_date": date_str,
+                "target_hour": f"{data.hour}:00",
+                "latitude": 39.95,
+                "longitude": -75.16
+            },
+            "output": historical_weather
+        })
+
+    if include_live:
+        live_weather = get_live_weather()
+        tool_calls.append({
+            "name": "get_live_weather",
+            "input": {
+                "monitored_region": "PJM East (Philadelphia Centroid)",
+                "latitude": 39.95,
+                "longitude": -75.16
+            },
+            "output": live_weather
+        })
+
+    # 3. Formulate dynamic prompt sections matching active tools
+    weather_context_blocks = []
+    if historical_weather:
+        weather_context_blocks.append(f"""2. Historical Meteorological Context (Tool: get_historical_weather):
+    - Target Timestamp: {historical_weather['derived_calendar_timestamp']}
+    - Historical Ambient Temperature: {historical_weather['temperature_celsius']}°C ({historical_weather['temperature_fahrenheit']}°F)
+    - Historical Feels Like: {historical_weather['feels_like_celsius']}°C ({historical_weather['feels_like_fahrenheit']}°F)
+    - Historical Relative Humidity: {historical_weather['relative_humidity_percent']}%
+    - Historical Wind Speed: {historical_weather['wind_speed_kmh']} km/h
+    - Historical Thermal Regime: {historical_weather['thermal_regime']}""")
+
+    if live_weather:
+        weather_context_blocks.append(f"""3. Real-Time Live Meteorological Telemetry (Tool: get_live_weather):
+    - Current Ambient Temperature: {live_weather['temperature_celsius']}°C ({live_weather['temperature_fahrenheit']}°F)
+    - Current Heat Index / Feels Like: {live_weather['feels_like_celsius']}°C ({live_weather['feels_like_fahrenheit']}°F)
+    - Current Relative Humidity: {live_weather['relative_humidity_percent']}%
+    - Current Wind Speed: {live_weather['wind_speed_kmh']} km/h""")
+
+    weather_text = ("\n\n    ".join(weather_context_blocks)) if weather_context_blocks else "2. Meteorological Context: No weather tools invoked per user instruction."
+
+    if not include_live and include_historical:
+        weather_instructions = f"""- USER DIRECTIVE: The user explicitly instructed to EXCLUDE live weather data. Focus EXCLUSIVELY on the historical weather telemetry on {date_str} at {data.hour}:00 and the grid load metrics. DO NOT mention, fetch, or compare live weather conditions.
+    - Provide a clean Markdown table of the Historical Weather telemetry."""
+    elif not include_historical and include_live:
+        weather_instructions = """- USER DIRECTIVE: The user requested LIVE weather analysis only. Focus on live meteorological telemetry and current grid conditions. DO NOT compare historical weather."""
+    elif not include_live and not include_historical:
+        weather_instructions = """- USER DIRECTIVE: Tools disabled by user instruction. Focus purely on the Input Metric Matrix and Machine Learning Demand Forecast."""
+    else:
+        weather_instructions = f"""- State clearly how you parsed the historical datetime ({date_str} at {data.hour}:00) directly from the user's input columns (Year: {data.year}, Month: {data.month}, Day of Year: {data.dayofyear}, Hour: {data.hour}).
+    - Compare Historical Weather vs Live Weather in a clean Markdown table.
+    - Explain the thermal variance: how the historical temperature on that date drove heating/cooling vs what live weather demands today."""
+
     system_prompt = f"""
-    You are an expert Power Grid AI Co-Pilot analyzing regional energy load metrics for PJM East (PJME).
+    You are an expert Power Grid AI Agent analyzing regional energy load metrics for PJM East (PJME).
     
     1. Input Metric Matrix (Parsed from Active Dashboard Columns):
     - Calendar Year: {data.year}
@@ -319,25 +416,11 @@ async def energy_copilot(data: CopilotRequest):
     - Historical Lags: 1h ago: {data.lag_1_hour:.2f} MW | 24h ago: {data.lag_24_hours:.2f} MW | 7d ago: {data.lag_7_days:.2f} MW
     - Statistical Trends: Rolling 24h: {data.rolling_mean_24h:.2f} MW | Rolling 7d: {data.rolling_mean_7d:.2f} MW
 
-    2. Historical Meteorological Context (Parsed from Columns -> Tool: get_historical_weather):
-    - Target Timestamp: {historical_weather['derived_calendar_timestamp']}
-    - Historical Ambient Temperature: {historical_weather['temperature_celsius']}°C ({historical_weather['temperature_fahrenheit']}°F)
-    - Historical Feels Like: {historical_weather['feels_like_celsius']}°C ({historical_weather['feels_like_fahrenheit']}°F)
-    - Historical Relative Humidity: {historical_weather['relative_humidity_percent']}%
-    - Historical Wind Speed: {historical_weather['wind_speed_kmh']} km/h
-    - Historical Thermal Regime: {historical_weather['thermal_regime']}
-
-    3. Real-Time Live Meteorological Telemetry (Tool: get_live_weather):
-    - Current Ambient Temperature: {live_weather['temperature_celsius']}°C ({live_weather['temperature_fahrenheit']}°F)
-    - Current Heat Index / Feels Like: {live_weather['feels_like_celsius']}°C ({live_weather['feels_like_fahrenheit']}°F)
-    - Current Relative Humidity: {live_weather['relative_humidity_percent']}%
-    - Current Wind Speed: {live_weather['wind_speed_kmh']} km/h
+    {weather_text}
 
     CRITICAL RESPONSE INSTRUCTIONS:
-    - State clearly how you parsed the historical datetime ({date_str} at {data.hour}:00) directly from the user's input columns (Year: {data.year}, Month: {data.month}, Day of Year: {data.dayofyear}, Hour: {data.hour}).
-    - Compare Historical Weather vs Live Weather in a clean Markdown table.
-    - Explain the thermal variance: how the historical temperature on that date drove heating/cooling vs what live weather demands today.
-    - DO NOT generate tool code, pseudo-code, or claim you are 'about to retrieve data' (all data is already retrieved above).
+    {weather_instructions}
+    - DO NOT generate tool code, pseudo-code, or claim you are 'about to retrieve data'.
     - MANDATORY FINISH: You MUST ALWAYS finish your response with a complete, fully formed bold header:
       **Actionable Operational Recommendation:**
       followed by specific dispatch instructions (MW curtailment, ramping, or reserve margin).
@@ -389,35 +472,6 @@ async def energy_copilot(data: CopilotRequest):
             )
             ai_response = boto_resp["output"]["message"]["content"][0]["text"]
             logger.info("LAMBDA_COPILOT_SUCCESS | Boto3 Converse fallback responded")
-
-        # Active tool call telemetry for frontend inspector (displaying user-parsed column values)
-        tool_calls = [
-            {
-                "name": "get_live_weather",
-                "input": {
-                    "monitored_region": "PJM East (Philadelphia Centroid)",
-                    "latitude": 39.95,
-                    "longitude": -75.16
-                },
-                "output": live_weather
-            },
-            {
-                "name": "get_historical_weather",
-                "input": {
-                    "parsed_from_user_columns": {
-                        "year": data.year,
-                        "month": data.month,
-                        "dayofyear": data.dayofyear,
-                        "hour": data.hour
-                    },
-                    "derived_target_date": date_str,
-                    "target_hour": f"{data.hour}:00",
-                    "latitude": 39.95,
-                    "longitude": -75.16
-                },
-                "output": historical_weather
-            }
-        ]
 
         return {
             "response": ai_response,
