@@ -32,6 +32,21 @@ try:
 except Exception as e:
     logger.warning(f"Bedrock runtime binding skipped: {e}")
 
+# Initialize LangChain ChatBedrockConverse client (AWS Bedrock Converse API integration)
+try:
+    from langchain_aws import ChatBedrockConverse
+    from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+    llm = ChatBedrockConverse(
+        model="google.gemma-3-12b-it",
+        region_name="ap-south-1",
+        temperature=0.3,
+        max_tokens=2048
+    )
+    logger.info("LangChain ChatBedrockConverse successfully initialized for ap-south-1")
+except Exception as e:
+    logger.warning(f"LangChain ChatBedrockConverse binding fallback: {e}")
+    llm = None
+
 
 # 2. Meteorological Tools (Live & Historical Archive APIs)
 def get_live_weather(lat: float = 39.95, lon: float = -75.16) -> dict:
@@ -330,35 +345,50 @@ async def energy_copilot(data: CopilotRequest):
     """
     
     try:
-        # Format incoming history for Bedrock converse API
-        bedrock_messages = []
+        # Build LangChain messages with SystemMessage and conversational history
+        langchain_messages = [SystemMessage(content=system_prompt)]
         for msg in data.chat_history:
             role = msg.get("role")
             text = msg.get("text") or msg.get("content") or ""
             if not text or role not in ("user", "assistant"):
                 continue
-            bedrock_messages.append({
-                "role": role,
-                "content": [{"text": text}]
-            })
-            
-        while bedrock_messages and bedrock_messages[0]["role"] == "assistant":
-            bedrock_messages.pop(0)
-            
-        if not bedrock_messages:
+            if role == "user":
+                langchain_messages.append(HumanMessage(content=text))
+            elif role == "assistant":
+                langchain_messages.append(AIMessage(content=text))
+
+        # Bedrock Converse requires conversations to lead with human/user messages
+        while len(langchain_messages) > 1 and isinstance(langchain_messages[1], AIMessage):
+            langchain_messages.pop(1)
+
+        if not any(isinstance(m, HumanMessage) for m in langchain_messages):
             return {"status": "error", "message": "No valid messages in chat history."}
 
-        # Invocation using Google Gemma 3 12B in ap-south-1 with 2048 token limit
-        response = bedrock_client.converse(
-            modelId="google.gemma-3-12b-it",
-            messages=bedrock_messages,
-            system=[{"text": system_prompt}],
-            inferenceConfig={"maxTokens": 2048, "temperature": 0.3}
-        )
-        
-        stop_reason = response.get("stopReason", "end_turn")
-        ai_response = response["output"]["message"]["content"][0]["text"]
-        logger.info(f"LAMBDA_COPILOT_SUCCESS | Bedrock responded | stopReason={stop_reason}")
+        # Primary engine: LangChain ChatBedrockConverse
+        if llm is not None:
+            response = llm.invoke(langchain_messages)
+            ai_response = response.content
+            if isinstance(ai_response, list):
+                ai_response = "".join(
+                    b.get("text", "") if isinstance(b, dict) else str(b) 
+                    for b in ai_response
+                )
+            logger.info("LAMBDA_COPILOT_SUCCESS | LangChain ChatBedrockConverse responded")
+        else:
+            # Fallback to direct boto3 converse if LangChain instance is unavailable
+            bedrock_messages = [
+                {"role": "user" if isinstance(m, HumanMessage) else "assistant",
+                 "content": [{"text": str(m.content)}]}
+                for m in langchain_messages if not isinstance(m, SystemMessage)
+            ]
+            boto_resp = bedrock_client.converse(
+                modelId="google.gemma-3-12b-it",
+                messages=bedrock_messages,
+                system=[{"text": system_prompt}],
+                inferenceConfig={"maxTokens": 2048, "temperature": 0.3}
+            )
+            ai_response = boto_resp["output"]["message"]["content"][0]["text"]
+            logger.info("LAMBDA_COPILOT_SUCCESS | Boto3 Converse fallback responded")
 
         # Active tool call telemetry for frontend inspector (displaying user-parsed column values)
         tool_calls = [
