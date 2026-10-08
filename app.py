@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Any
@@ -284,6 +285,32 @@ except Exception as e:
 
 # 3. Initialize FastAPI App
 app = FastAPI(title="PJME Serverless Energy API")
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    custom_messages = []
+    for err in exc.errors():
+        loc = err.get("loc", [])
+        field = loc[-1] if loc else "field"
+        if field == "hour":
+            custom_messages.append("Hour: enter between 0 and 23")
+        elif field == "dayofweek":
+            custom_messages.append("Day of week: enter between 0 (Monday) and 6 (Sunday)")
+        elif field == "quarter":
+            custom_messages.append("Quarter: enter between 1 and 4")
+        elif field == "month":
+            custom_messages.append("Month: enter between 1 and 12")
+        elif field == "dayofyear":
+            custom_messages.append("Day of year: enter between 1 and 366")
+        elif field == "is_weekend":
+            custom_messages.append("Is weekend: enter 0 (weekday) or 1 (weekend)")
+        else:
+            custom_messages.append(f"{field}: {err.get('msg')}")
+
+    return JSONResponse(
+        status_code=422,
+        content={"status": "error", "message": " | ".join(custom_messages), "detail": custom_messages}
+    )
 
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "models/best_model.pkl")
 model = joblib.load(MODEL_PATH) if os.path.exists(MODEL_PATH) else None
