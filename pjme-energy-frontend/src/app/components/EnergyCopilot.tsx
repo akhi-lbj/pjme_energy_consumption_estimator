@@ -101,10 +101,40 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const prevPredictionRef = useRef<number | undefined>(undefined);
+
+    const activeDateStr = `${currentMetrics.year}-${String(currentMetrics.month).padStart(2, '0')} (Day ${currentMetrics.dayofyear}) @ ${currentMetrics.hour}:00`;
+
+    // Automatically detect when a new forecast job is generated on the dashboard
+    useEffect(() => {
+        if (
+            currentMetrics.prediction_mw !== undefined &&
+            currentMetrics.prediction_mw !== prevPredictionRef.current
+        ) {
+            prevPredictionRef.current = currentMetrics.prediction_mw;
+            setMessages(prev => [
+                ...prev,
+                {
+                    role: 'assistant',
+                    text: `⚡ **New Forecast Job Loaded:** **${currentMetrics.prediction_mw?.toLocaleString()} MW** for **${activeDateStr}**.\n\nActive telemetry updated. What would you like to examine regarding this forecast?`
+                }
+            ]);
+        }
+    }, [currentMetrics.prediction_mw, currentMetrics.year, currentMetrics.month, currentMetrics.dayofyear, currentMetrics.hour, activeDateStr]);
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages, loading]);
+
+    const handleClearChat = () => {
+        setMessages([
+            { role: 'assistant', text: `Hello! I'm your Grid Agent. Ready to analyze active forecast (${currentMetrics.prediction_mw ? `${currentMetrics.prediction_mw.toLocaleString()} MW` : 'Configure metrics on the left'}).` }
+        ]);
+    };
+
+    const handleQuickPrompt = (promptText: string) => {
+        setInput(promptText);
+    };
 
     const handleSendMessage = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -168,11 +198,33 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
 
     return (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-7 flex flex-col h-[640px] xl:h-[760px] max-h-[640px] xl:max-h-[760px] shadow-2xl text-white">
-            <div className="flex-shrink-0 border-b border-slate-800 pb-4 mb-4">
-                <h3 className="text-2xl font-bold text-emerald-400 flex items-center gap-2.5">
-                    <span>⚡</span> Grid Agent
-                </h3>
-                <p className="text-sm text-slate-300 mt-1">Autonomous grid intelligence & weather analytics</p>
+            <div className="flex-shrink-0 border-b border-slate-800 pb-3 mb-3">
+                <div className="flex items-center justify-between">
+                    <h3 className="text-2xl font-bold text-emerald-400 flex items-center gap-2.5">
+                        <span>⚡</span> Grid Agent
+                    </h3>
+                    <button
+                        type="button"
+                        onClick={handleClearChat}
+                        className="text-xs font-mono text-slate-400 hover:text-emerald-300 border border-slate-700/60 hover:border-emerald-500/50 px-2.5 py-1 rounded-md transition-all cursor-pointer bg-slate-950/60"
+                        title="Reset conversation session for active forecast"
+                    >
+                        🔄 New Session
+                    </button>
+                </div>
+                <p className="text-xs text-slate-400 mt-1">Autonomous grid intelligence & weather analytics</p>
+
+                {/* Active Forecast Target Strip */}
+                <div className="flex items-center justify-between bg-slate-950/90 border border-slate-800 rounded-lg px-3 py-1.5 mt-2.5 text-xs font-mono">
+                    <span className="text-slate-400">Active Target: <strong className="text-emerald-300 font-semibold">{activeDateStr}</strong></span>
+                    {currentMetrics.prediction_mw ? (
+                        <span className="text-emerald-400 font-bold bg-emerald-950/80 border border-emerald-800/60 px-2 py-0.5 rounded shadow-sm">
+                            ⚡ {currentMetrics.prediction_mw.toLocaleString()} MW
+                        </span>
+                    ) : (
+                        <span className="text-slate-500 italic">Awaiting forecast run</span>
+                    )}
+                </div>
             </div>
 
             <div className="flex-1 min-h-0 overflow-y-auto space-y-4 mb-4 pr-2 agent-scrollbar">
@@ -236,7 +288,32 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
                 <div ref={messagesEndRef} />
             </div>
 
-            <form onSubmit={handleSendMessage} className="flex-shrink-0 flex gap-3 pt-2">
+            {/* Quick Action Suggestion Pills */}
+            <div className="flex items-center gap-2 overflow-x-auto pb-2 text-xs font-mono select-none">
+                <button
+                    type="button"
+                    onClick={() => handleQuickPrompt(`Examine active forecast findings (${currentMetrics.prediction_mw ? `${currentMetrics.prediction_mw.toLocaleString()} MW` : 'current load'}) and grid status.`)}
+                    className="whitespace-nowrap px-2.5 py-1 rounded-full bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-700 hover:border-emerald-500/50 transition-all cursor-pointer text-[11px]"
+                >
+                    📊 Examine Findings
+                </button>
+                <button
+                    type="button"
+                    onClick={() => handleQuickPrompt("What is the meteorological weather impact on this forecast load?")}
+                    className="whitespace-nowrap px-2.5 py-1 rounded-full bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-700 hover:border-emerald-500/50 transition-all cursor-pointer text-[11px]"
+                >
+                    🌡️ Weather Impact
+                </button>
+                <button
+                    type="button"
+                    onClick={() => handleQuickPrompt("Simulate contingency scenario if temperature rises by 5 degrees and we curtail 500 MW.")}
+                    className="whitespace-nowrap px-2.5 py-1 rounded-full bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-700 hover:border-emerald-500/50 transition-all cursor-pointer text-[11px]"
+                >
+                    ⚡ What-If Scenario
+                </button>
+            </div>
+
+            <form onSubmit={handleSendMessage} className="flex-shrink-0 flex gap-3 pt-1">
                 <input
                     type="text"
                     value={input}

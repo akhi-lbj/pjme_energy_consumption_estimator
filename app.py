@@ -438,6 +438,25 @@ async def energy_copilot(data: CopilotRequest):
         if not any(isinstance(m, HumanMessage) for m in langchain_messages):
             return {"status": "error", "message": "No valid messages in chat history."}
 
+        active_forecast_block = (
+            f"[ACTIVE FORECAST JOB TELEMETRY]:\n"
+            f"- Target Calendar Date: {date_str} (Year: {data.year}, Month: {data.month}, Day of Year: {data.dayofyear})\n"
+            f"- Target Operating Hour: {data.hour:02d}:00\n"
+            f"- Machine Learning Demand Forecast: {data.current_prediction:.2f} MW\n"
+            f"- Day of Week Index: {data.dayofweek} (Weekend: {'Yes' if data.is_weekend == 1 else 'No'})\n"
+            f"- Historical Lags: 1h ago: {data.lag_1_hour:.2f} MW | 24h ago: {data.lag_24_hours:.2f} MW | 7d ago: {data.lag_7_days:.2f} MW\n"
+            f"- Trends: Rolling 24h: {data.rolling_mean_24h:.2f} MW | Rolling 7d: {data.rolling_mean_7d:.2f} MW\n"
+            f"NOTE: The operator is analyzing THIS active forecast job. Disregard any prior dates or numbers from earlier conversation turns.\n"
+        )
+
+        # Prepend active forecast context to the latest human query so the model always anchors to the active forecast
+        for i in reversed(range(len(langchain_messages))):
+            if isinstance(langchain_messages[i], HumanMessage):
+                langchain_messages[i] = HumanMessage(
+                    content=f"{active_forecast_block}\nOperator Query: {langchain_messages[i].content}"
+                )
+                break
+
         executed_tool_calls = []
         ai_response = ""
 
@@ -461,12 +480,13 @@ async def energy_copilot(data: CopilotRequest):
                     t_name = tc.get("name")
                     t_args = tc.get("args") or {}
 
-                    # Inject defaults if omitted by model
+                    # Ensure tool calls align with the active forecast job
                     if t_name == "get_historical_weather":
-                        t_args.setdefault("year", data.year)
-                        t_args.setdefault("month", data.month)
-                        t_args.setdefault("dayofyear", data.dayofyear)
-                        t_args.setdefault("hour", data.hour)
+                        t_args["year"] = data.year
+                        t_args["month"] = data.month
+                        t_args["dayofyear"] = data.dayofyear
+                        t_args["hour"] = data.hour
+                        t_args["date_str"] = date_str
                     elif t_name == "simulate_what_if_scenario":
                         t_args.setdefault("baseline_prediction_mw", data.current_prediction)
 
