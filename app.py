@@ -285,15 +285,6 @@ except Exception as e:
 # 3. Initialize FastAPI App
 app = FastAPI(title="PJME Serverless Energy API")
 
-# Add CORS Middleware to support streaming & cross-origin frontend requests
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "models/best_model.pkl")
 model = joblib.load(MODEL_PATH) if os.path.exists(MODEL_PATH) else None
 
@@ -615,7 +606,6 @@ async def energy_copilot(data: CopilotRequest, request: Request):
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",
-                "Access-Control-Allow-Origin": "*",
             }
         )
 
