@@ -20,28 +20,28 @@ The application decouples the machine learning data pipeline, cloud serverless m
 
 ```mermaid
 graph TB
-    subgraph Data Pipeline & Serialization
-        EDA[1_eda.ipynb] --> FE[2_feature_engineering.ipynb]
-        FE --> MT[3_ModelTraining.ipynb]
-        MT --> Model[(models/best_model.pkl)]
-        MT --> RepFig[reports/output.png]
-        MT --> RepMet[reports/metrics.json]
+    subgraph Pipeline["Data Pipeline & Serialization"]
+        EDA["1_eda.ipynb"] --> FE["2_feature_engineering.ipynb"]
+        FE --> MT["3_ModelTraining.ipynb"]
+        MT --> Model[("models/best_model.pkl")]
+        MT --> RepFig["reports/output.png"]
+        MT --> RepMet["reports/metrics.json"]
     end
 
-    subgraph AWS Serverless Backend (Lambda Container)
-        API[app.py FastAPI & Mangum]
+    subgraph Backend["AWS Serverless Backend (Lambda Container)"]
+        API["app.py FastAPI & Mangum"]
         Model -->|Inference Engine| API
-        API -->|Async Telemetry Stream| CW[AWS CloudWatch via Watchtower]
-        API -->|Bedrock Converse API| Bedrock[Amazon Bedrock<br/>openai.gpt-oss-20b-1:0]
-        API -->|Meteorological Archive API| HistWeather[Open-Meteo Archive API]
-        API -->|Live Telemetry API| LiveWeather[Open-Meteo High-Resolution API]
+        API -->|Async Telemetry Stream| CW["AWS CloudWatch via Watchtower"]
+        API -->|Bedrock Converse API| Bedrock["Amazon Bedrock (openai.gpt-oss-20b-1:0)"]
+        API -->|Meteorological Archive API| HistWeather["Open-Meteo Archive API"]
+        API -->|Live Telemetry API| LiveWeather["Open-Meteo High-Resolution API"]
         HistWeather -->|Historical Weather Tool| API
         LiveWeather -->|Live Weather Tool| API
         Bedrock <-->|Multi-Turn Autonomous Tools| API
     end
 
-    subgraph Operator Client UI (Next.js 16 / AWS Amplify)
-        FE_UI[Next.js App Router Dashboard]
+    subgraph Client["Operator Client UI (Next.js 16 / AWS Amplify)"]
+        FE_UI["Next.js App Router Dashboard"]
         FE_UI -->|1. POST /predict - Feature Matrix| API
         FE_UI -->|2. POST /copilot - Telemetry & History| API
         API -->|Predictions & Structured Reasoning| FE_UI
