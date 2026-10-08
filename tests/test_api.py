@@ -51,3 +51,55 @@ def test_historical_weather_tool():
     assert "temperature_celsius" in weather
     assert "temperature_fahrenheit" in weather
     assert "target_date" in weather
+
+def test_copilot_streaming_sse():
+    from app import app as serverless_app
+    with TestClient(serverless_app) as client:
+        payload = {
+            "chat_history": [{"role": "user", "text": "Say hello in 3 words."}],
+            "current_prediction": 25000.0,
+            "hour": 14,
+            "dayofweek": 2,
+            "quarter": 1,
+            "month": 1,
+            "year": 2016,
+            "dayofyear": 4,
+            "is_weekend": 0,
+            "lag_1_hour": 24000.0,
+            "lag_24_hours": 24500.0,
+            "lag_7_days": 23900.0,
+            "rolling_mean_24h": 24200.0,
+            "rolling_mean_7d": 24100.0,
+            "stream": True
+        }
+        with client.stream("POST", "/copilot", json=payload) as response:
+            assert response.status_code == 200
+            assert "text/event-stream" in response.headers.get("content-type", "")
+            lines = [line for line in response.iter_lines() if line]
+            assert any("data: " in line for line in lines)
+            assert any('"type": "done"' in line for line in lines)
+
+def test_copilot_empty_history():
+    from app import app as serverless_app
+    with TestClient(serverless_app) as client:
+        payload = {
+            "chat_history": [],
+            "current_prediction": 25000.0,
+            "hour": 14,
+            "dayofweek": 2,
+            "quarter": 1,
+            "month": 1,
+            "year": 2016,
+            "dayofyear": 4,
+            "is_weekend": 0,
+            "lag_1_hour": 24000.0,
+            "lag_24_hours": 24500.0,
+            "lag_7_days": 23900.0,
+            "rolling_mean_24h": 24200.0,
+            "rolling_mean_7d": 24100.0,
+            "stream": False
+        }
+        response = client.post("/copilot", json=payload)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "error"

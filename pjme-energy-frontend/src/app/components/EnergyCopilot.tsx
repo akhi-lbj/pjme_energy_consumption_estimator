@@ -100,6 +100,7 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
     ]);
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
+    const [isStreaming, setIsStreaming] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const prevPredictionRef = useRef<number | undefined>(undefined);
 
@@ -123,8 +124,8 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
     }, [currentMetrics.prediction_mw, currentMetrics.year, currentMetrics.month, currentMetrics.dayofyear, currentMetrics.hour, activeDateStr]);
 
     useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages, loading]);
+        messagesEndRef.current?.scrollIntoView({ behavior: isStreaming ? 'auto' : 'smooth' });
+    }, [messages, loading, isStreaming]);
 
     const handleClearChat = () => {
         setMessages([
@@ -142,16 +143,19 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
 
         const userMsg = input;
         setInput('');
-        setMessages(prev => [...prev, { role: 'user', text: userMsg }]);
+        const nextMessages: Message[] = [...messages, { role: 'user', text: userMsg }];
+        setMessages(nextMessages);
         setLoading(true);
 
         try {
             const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-            const nextMessages = [...messages, { role: 'user', text: userMsg }];
 
             const response = await fetch(`${baseUrl}/copilot`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Accept': 'text/event-stream, application/json'
+                },
                 body: JSON.stringify({
                     chat_history: nextMessages.map(m => ({
                         role: m.role,
@@ -170,29 +174,117 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
                     lag_7_days: currentMetrics.lag_7_days,
                     rolling_mean_24h: currentMetrics.rolling_mean_24h,
                     rolling_mean_7d: currentMetrics.rolling_mean_7d,
+                    stream: true,
                 }),
             });
 
-            const data = await response.json();
-
-            if (data.status === 'success') {
-                setMessages(prev => [...prev, { 
-                    role: 'assistant', 
-                    text: data.response,
-                    tool_calls: data.tool_calls || []
-                }]);
-            } else {
-                const errorMsg = typeof data?.detail === 'string'
-                    ? data.detail
-                    : Array.isArray(data?.detail)
-                        ? data.detail.map((d: any) => d.msg || JSON.stringify(d)).join(', ')
-                        : data?.message || data?.Message || "Temporary grid service glitch. Please resend your query.";
-                setMessages(prev => [...prev, { role: 'assistant', text: `Glitch: ${errorMsg}` }]);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: Failed to reach Grid Agent`);
             }
-        } catch (error) {
-            setMessages(prev => [...prev, { role: 'assistant', text: "Failed to communicate with the grid intelligence engine. Please retry." }]);
+
+            const contentType = response.headers.get('content-type') || '';
+
+            if (contentType.includes('text/event-stream') && response.body) {
+                // Initialize assistant response container for token-by-token streaming
+                setMessages(prev => [...prev, { role: 'assistant', text: '', tool_calls: [] }]);
+                setIsStreaming(true);
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                try {
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop() || '';
+
+                        for (const line of lines) {
+                            const trimmed = line.trim();
+                            if (!trimmed || !trimmed.startsWith('data:')) continue;
+                            const payloadStr = trimmed.slice(5).trim();
+                            if (!payloadStr || payloadStr === '[DONE]') continue;
+
+                            try {
+                                const ev = JSON.parse(payloadStr);
+
+                                if (ev.type === 'token' && typeof ev.text === 'string') {
+                                    setMessages(prev => {
+                                        const next = [...prev];
+                                        const last = next[next.length - 1];
+                                        if (last && last.role === 'assistant') {
+                                            next[next.length - 1] = {
+                                                ...last,
+                                                text: last.text + ev.text
+                                            };
+                                        }
+                                        return next;
+                                    });
+                                } else if (ev.type === 'tool_call') {
+                                    setMessages(prev => {
+                                        const next = [...prev];
+                                        const last = next[next.length - 1];
+                                        if (last && last.role === 'assistant') {
+                                            const prevTools = last.tool_calls || [];
+                                            next[next.length - 1] = {
+                                                ...last,
+                                                tool_calls: [...prevTools, {
+                                                    name: ev.name,
+                                                    input: ev.input || {},
+                                                    output: ev.output || {}
+                                                }]
+                                            };
+                                        }
+                                        return next;
+                                    });
+                                } else if (ev.type === 'error') {
+                                    setMessages(prev => {
+                                        const next = [...prev];
+                                        const last = next[next.length - 1];
+                                        if (last && last.role === 'assistant') {
+                                            next[next.length - 1] = {
+                                                ...last,
+                                                text: (last.text ? last.text + '\n\n' : '') + `⚠️ **Operational Glitch:** ${ev.message}`
+                                            };
+                                        }
+                                        return next;
+                                    });
+                                }
+                            } catch (parseErr) {
+                                console.error('SSE payload parse error:', parseErr, payloadStr);
+                            }
+                        }
+                    }
+                } finally {
+                    setIsStreaming(false);
+                }
+            } else {
+                // Backward-compatible JSON response handler
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    setMessages(prev => [...prev, { 
+                        role: 'assistant', 
+                        text: data.response,
+                        tool_calls: data.tool_calls || []
+                    }]);
+                } else {
+                    const errorMsg = typeof data?.detail === 'string'
+                        ? data.detail
+                        : Array.isArray(data?.detail)
+                            ? data.detail.map((d: any) => d.msg || JSON.stringify(d)).join(', ')
+                            : data?.message || data?.Message || "Temporary grid service glitch. Please resend your query.";
+                    setMessages(prev => [...prev, { role: 'assistant', text: `Glitch: ${errorMsg}` }]);
+                }
+            }
+        } catch (error: any) {
+            setMessages(prev => [...prev, { role: 'assistant', text: `Failed to communicate with the grid intelligence engine: ${error?.message || 'Please retry.'}` }]);
         } finally {
             setLoading(false);
+            setIsStreaming(false);
         }
     };
 
@@ -236,48 +328,62 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
                             </div>
                         ) : (
                             <div className="max-w-[95%] rounded-xl px-5 py-4 text-base bg-slate-800/90 text-slate-100 border border-slate-700/70 shadow-lg leading-relaxed">
-                                <ReactMarkdown
-                                    remarkPlugins={[remarkGfm]}
-                                    components={{
-                                        p: ({ node, ...props }) => <p className="mb-2.5 last:mb-0 leading-relaxed text-slate-200 text-base" {...props} />,
-                                        strong: ({ node, ...props }) => <strong className="font-bold text-emerald-300 text-base" {...props} />,
-                                        em: ({ node, ...props }) => <em className="italic text-emerald-200" {...props} />,
-                                        ul: ({ node, ...props }) => <ul className="list-disc list-inside space-y-1.5 my-2.5 text-slate-200 text-base" {...props} />,
-                                        ol: ({ node, ...props }) => <ol className="list-decimal list-inside space-y-1.5 my-2.5 text-slate-200 text-base" {...props} />,
-                                        li: ({ node, ...props }) => <li className="text-slate-200 leading-relaxed text-base" {...props} />,
-                                        table: ({ node, ...props }) => (
-                                            <div className="overflow-x-auto my-3 border border-slate-700 rounded-lg shadow-sm">
-                                                <table className="min-w-full divide-y divide-slate-700 text-sm text-left" {...props} />
-                                            </div>
-                                        ),
-                                        thead: ({ node, ...props }) => <thead className="bg-slate-950/90 text-emerald-400 font-semibold" {...props} />,
-                                        tbody: ({ node, ...props }) => <tbody className="divide-y divide-slate-700/60 bg-slate-800/40" {...props} />,
-                                        tr: ({ node, ...props }) => <tr className="hover:bg-slate-700/30 transition-colors" {...props} />,
-                                        th: ({ node, ...props }) => <th className="px-3.5 py-2.5 font-semibold uppercase tracking-wider" {...props} />,
-                                        td: ({ node, ...props }) => <td className="px-3.5 py-2.5 text-slate-300" {...props} />,
-                                        code: ({ node, className, children, ...props }) => (
-                                            <code className="bg-slate-950 border border-slate-800 px-2 py-0.5 rounded text-sm font-mono text-emerald-300" {...props}>
-                                                {children}
-                                            </code>
-                                        ),
-                                        blockquote: ({ node, ...props }) => (
-                                            <blockquote className="border-l-4 border-emerald-500 pl-4 my-2.5 italic text-slate-300 bg-slate-950/60 py-2 rounded-r-lg text-sm sm:text-base" {...props} />
-                                        ),
-                                        h1: ({ node, ...props }) => <h1 className="text-lg font-bold text-emerald-400 my-2" {...props} />,
-                                        h2: ({ node, ...props }) => <h2 className="text-base font-bold text-emerald-400 my-2" {...props} />,
-                                        h3: ({ node, ...props }) => <h3 className="text-sm font-bold text-emerald-300 my-1.5 uppercase tracking-wider" {...props} />,
-                                    }}
-                                >
-                                    {msg.text}
-                                </ReactMarkdown>
+                                {!msg.text && (!msg.tool_calls || msg.tool_calls.length === 0) ? (
+                                    <div className="flex items-center gap-2 text-slate-400 text-sm py-1 font-mono">
+                                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                                        Connecting to Grid Agent stream...
+                                    </div>
+                                ) : (
+                                    <>
+                                        <ReactMarkdown
+                                            remarkPlugins={[remarkGfm]}
+                                            components={{
+                                                p: ({ node, ...props }) => <p className="mb-2.5 last:mb-0 leading-relaxed text-slate-200 text-base" {...props} />,
+                                                strong: ({ node, ...props }) => <strong className="font-bold text-emerald-300 text-base" {...props} />,
+                                                em: ({ node, ...props }) => <em className="italic text-emerald-200" {...props} />,
+                                                ul: ({ node, ...props }) => <ul className="list-disc list-inside space-y-1.5 my-2.5 text-slate-200 text-base" {...props} />,
+                                                ol: ({ node, ...props }) => <ol className="list-decimal list-inside space-y-1.5 my-2.5 text-slate-200 text-base" {...props} />,
+                                                li: ({ node, ...props }) => <li className="text-slate-200 leading-relaxed text-base" {...props} />,
+                                                table: ({ node, ...props }) => (
+                                                    <div className="overflow-x-auto my-3 border border-slate-700 rounded-lg shadow-sm">
+                                                        <table className="min-w-full divide-y divide-slate-700 text-sm text-left" {...props} />
+                                                    </div>
+                                                ),
+                                                thead: ({ node, ...props }) => <thead className="bg-slate-950/90 text-emerald-400 font-semibold" {...props} />,
+                                                tbody: ({ node, ...props }) => <tbody className="divide-y divide-slate-700/60 bg-slate-800/40" {...props} />,
+                                                tr: ({ node, ...props }) => <tr className="hover:bg-slate-700/30 transition-colors" {...props} />,
+                                                th: ({ node, ...props }) => <th className="px-3.5 py-2.5 font-semibold uppercase tracking-wider" {...props} />,
+                                                td: ({ node, ...props }) => <td className="px-3.5 py-2.5 text-slate-300" {...props} />,
+                                                code: ({ node, className, children, ...props }) => (
+                                                    <code className="bg-slate-950 border border-slate-800 px-2 py-0.5 rounded text-sm font-mono text-emerald-300" {...props}>
+                                                        {children}
+                                                    </code>
+                                                ),
+                                                blockquote: ({ node, ...props }) => (
+                                                    <blockquote className="border-l-4 border-emerald-500 pl-4 my-2.5 italic text-slate-300 bg-slate-950/60 py-2 rounded-r-lg text-sm sm:text-base" {...props} />
+                                                ),
+                                                h1: ({ node, ...props }) => <h1 className="text-lg font-bold text-emerald-400 my-2" {...props} />,
+                                                h2: ({ node, ...props }) => <h2 className="text-base font-bold text-emerald-400 my-2" {...props} />,
+                                                h3: ({ node, ...props }) => <h3 className="text-sm font-bold text-emerald-300 my-1.5 uppercase tracking-wider" {...props} />,
+                                            }}
+                                        >
+                                            {msg.text}
+                                        </ReactMarkdown>
 
-                                {/* Interactive Tool Calls Component */}
-                                <ToolCallsBadge toolCalls={msg.tool_calls} />
+                                        {/* Real-time Streaming Cursor */}
+                                        {isStreaming && idx === messages.length - 1 && (
+                                            <span className="inline-block w-2 h-4 ml-1.5 bg-emerald-400 animate-pulse align-middle rounded-sm shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+                                        )}
+
+                                        {/* Interactive Tool Calls Component */}
+                                        <ToolCallsBadge toolCalls={msg.tool_calls} />
+                                    </>
+                                )}
                             </div>
                         )}
                     </div>
                 ))}
-                {loading && (
+                {loading && !isStreaming && (
                     <div className="flex justify-start">
                         <div className="bg-slate-800 text-slate-300 text-sm rounded-xl px-4 py-3 border border-slate-700/80 animate-pulse flex items-center gap-2">
                             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>

@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Any
@@ -224,7 +225,52 @@ def extract_text_from_content(content) -> str:
     return str(content)
 
 
-# Autonomous LangChain Tools Registration
+# Autonomous Bedrock & LangChain Tools Registration
+BEDROCK_TOOLS_CONFIG = {
+    "tools": [
+        {
+            "toolSpec": {
+                "name": "get_historical_weather",
+                "description": "Fetches historical meteorological archive data for a specific calendar date and operating hour in PJM East.",
+                "inputSchema": {
+                    "json": {
+                        "type": "object",
+                        "properties": {
+                            "year": {"type": "integer", "description": "Calendar year, e.g. 2016"},
+                            "month": {"type": "integer", "description": "Month of the year (1-12)"},
+                            "dayofyear": {"type": "integer", "description": "Day of the year (1-366)"},
+                            "hour": {"type": "integer", "description": "Operating hour (0-23)"},
+                            "date_str": {"type": "string", "description": "Optional YYYY-MM-DD date string"},
+                            "lat": {"type": "number", "description": "Latitude (default: 39.95)"},
+                            "lon": {"type": "number", "description": "Longitude (default: -75.16)"}
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "toolSpec": {
+                "name": "get_live_weather",
+                "description": "Fetches real-time live meteorological telemetry for grid coordinates (default: PJM East / Philadelphia, PA).",
+                "inputSchema": {
+                    "json": {
+                        "type": "object",
+                        "properties": {
+                            "lat": {"type": "number", "description": "Latitude (default: 39.95)"},
+                            "lon": {"type": "number", "description": "Longitude (default: -75.16)"}
+                        }
+                    }
+                }
+            }
+        }
+    ]
+}
+
+COPILOT_TOOL_FUNCTIONS = {
+    "get_historical_weather": get_historical_weather,
+    "get_live_weather": get_live_weather,
+}
+
 try:
     COPILOT_TOOLS = [
         tool(get_historical_weather),
@@ -238,6 +284,15 @@ except Exception as e:
 
 # 3. Initialize FastAPI App
 app = FastAPI(title="PJME Serverless Energy API")
+
+# Add CORS Middleware to support streaming & cross-origin frontend requests
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "models/best_model.pkl")
 model = joblib.load(MODEL_PATH) if os.path.exists(MODEL_PATH) else None
@@ -275,6 +330,7 @@ class CopilotRequest(BaseModel):
     lag_7_days: float
     rolling_mean_24h: float
     rolling_mean_7d: float
+    stream: bool = True
 
 
 # 5. API Endpoints
@@ -320,14 +376,188 @@ def predict_energy(payload: EnergyPredictionRequest, request: Request):
         return {"status": "error", "message": str(e)}
 
 
+def build_bedrock_messages(chat_history: list[dict[str, Any]], active_forecast_block: str) -> list[dict[str, Any]]:
+    """Sanitizes and normalizes conversation turns for AWS Bedrock Converse alternating roles."""
+    raw_messages = []
+    for msg in chat_history:
+        role = msg.get("role")
+        text = (msg.get("text") or msg.get("content") or "").strip()
+        if not text or role not in ("user", "assistant"):
+            continue
+        raw_messages.append({"role": role, "text": text})
+
+    # Bedrock requires conversations to start with a user message
+    while raw_messages and raw_messages[0]["role"] != "user":
+        raw_messages.pop(0)
+
+    if not raw_messages:
+        return []
+
+    # Merge consecutive turns of identical roles (prevents Bedrock turn validation exceptions)
+    consolidated = []
+    for m in raw_messages:
+        if consolidated and consolidated[-1]["role"] == m["role"]:
+            consolidated[-1]["text"] += "\n\n" + m["text"]
+        else:
+            consolidated.append(dict(m))
+
+    # Ensure the final turn is a user prompt
+    if consolidated[-1]["role"] != "user":
+        consolidated.append({"role": "user", "text": "Analyze active forecast telemetry."})
+
+    # Prepend active forecast context block to the latest human query
+    consolidated[-1]["text"] = f"{active_forecast_block}\nOperator Query: {consolidated[-1]['text']}"
+
+    return [
+        {"role": m["role"], "content": [{"text": m["text"]}]}
+        for m in consolidated
+    ]
+
+
+def copilot_stream_generator(bedrock_messages: list[dict[str, Any]], system_prompt: str, active_date_meta: dict[str, Any]):
+    """
+    Streams tokens and tool telemetry in real time using AWS Bedrock ConverseStream API over Server-Sent Events (SSE).
+    """
+    current_messages = list(bedrock_messages)
+    max_turns = 4
+    executed_tools = []
+
+    try:
+        while max_turns > 0:
+            max_turns -= 1
+            try:
+                stream_response = bedrock_client.converse_stream(
+                    modelId=BEDROCK_MODEL_ID,
+                    messages=current_messages,
+                    system=[{"text": system_prompt}],
+                    toolConfig=BEDROCK_TOOLS_CONFIG,
+                    inferenceConfig={"maxTokens": 2048, "temperature": 0.2}
+                )
+            except Exception as exc:
+                logger.error(f"BEDROCK_STREAM_CRASH | {exc}")
+                yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+                return
+
+            content_blocks = {}
+            stop_reason = None
+
+            for event in stream_response.get("stream", []):
+                if "contentBlockStart" in event:
+                    idx = event["contentBlockStart"]["contentBlockIndex"]
+                    content_blocks[idx] = event["contentBlockStart"]["start"]
+
+                elif "contentBlockDelta" in event:
+                    idx = event["contentBlockDelta"]["contentBlockIndex"]
+                    delta = event["contentBlockDelta"]["delta"]
+
+                    # Stream text token directly to client for near-zero perceived latency
+                    if "text" in delta:
+                        token_text = delta["text"]
+                        if token_text:
+                            yield f"data: {json.dumps({'type': 'token', 'text': token_text})}\n\n"
+
+                    # Accumulate toolUse arguments
+                    if "toolUse" in delta and "input" in delta["toolUse"]:
+                        if idx not in content_blocks:
+                            content_blocks[idx] = {"toolUse": {"input": ""}}
+                        tu = content_blocks[idx].get("toolUse", {})
+                        tu["input"] = tu.get("input", "") + delta["toolUse"]["input"]
+                        content_blocks[idx]["toolUse"] = tu
+
+                elif "contentBlockStop" in event:
+                    pass
+
+                elif "messageStop" in event:
+                    stop_reason = event["messageStop"].get("stopReason")
+
+            # Check if autonomous tool invocation is required
+            if stop_reason == "tool_use":
+                assistant_content = []
+                tool_results = []
+
+                for idx, blk in sorted(content_blocks.items()):
+                    if "toolUse" in blk:
+                        tu = blk["toolUse"]
+                        tu_id = tu.get("toolUseId")
+                        t_name = tu.get("name")
+                        raw_inp = tu.get("input", "{}")
+
+                        try:
+                            t_args = json.loads(raw_inp) if isinstance(raw_inp, str) and raw_inp.strip() else (raw_inp if isinstance(raw_inp, dict) else {})
+                        except Exception:
+                            t_args = {}
+
+                        # Ensure tool parameters synchronize with active forecast session
+                        if t_name == "get_historical_weather":
+                            t_args.setdefault("year", active_date_meta.get("year"))
+                            t_args.setdefault("month", active_date_meta.get("month"))
+                            t_args.setdefault("dayofyear", active_date_meta.get("dayofyear"))
+                            t_args.setdefault("hour", active_date_meta.get("hour"))
+                            t_args.setdefault("date_str", active_date_meta.get("date_str"))
+
+                        # Execute tool
+                        fn = COPILOT_TOOL_FUNCTIONS.get(t_name)
+                        if fn:
+                            try:
+                                output = fn(**t_args)
+                            except Exception as te:
+                                output = {"status": "error", "message": str(te)}
+                        else:
+                            output = {"status": "error", "message": f"Tool '{t_name}' not found."}
+
+                        executed_tools.append({
+                            "name": t_name,
+                            "input": t_args,
+                            "output": output
+                        })
+
+                        # Yield SSE tool call event so UI displays invocation badge in real time
+                        yield f"data: {json.dumps({'type': 'tool_call', 'name': t_name, 'input': t_args, 'output': output})}\n\n"
+
+                        assistant_content.append({
+                            "toolUse": {
+                                "toolUseId": tu_id,
+                                "name": t_name,
+                                "input": t_args
+                            }
+                        })
+                        tool_results.append({
+                            "toolResult": {
+                                "toolUseId": tu_id,
+                                "content": [{"json": output}],
+                                "status": "success" if output.get("status") != "error" else "error"
+                            }
+                        })
+
+                current_messages.append({"role": "assistant", "content": assistant_content})
+                current_messages.append({"role": "user", "content": tool_results})
+            else:
+                break
+
+        logger.info(f"LAMBDA_COPILOT_STREAM_SUCCESS | Stream completed ({len(executed_tools)} tools invoked)")
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+    except Exception as e:
+        logger.error(f"LAMBDA_COPILOT_STREAM_CRASH | {e}")
+        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+
 @app.post("/copilot")
-async def energy_copilot(data: CopilotRequest):
+async def energy_copilot(data: CopilotRequest, request: Request):
     # Dynamically derive calendar date from active user input columns
     try:
         target_date = datetime.date(data.year, 1, 1) + datetime.timedelta(days=max(0, data.dayofyear - 1))
         date_str = target_date.strftime("%Y-%m-%d")
     except Exception:
         date_str = f"{data.year:04d}-{max(1, min(12, data.month)):02d}-01"
+
+    active_date_meta = {
+        "year": data.year,
+        "month": data.month,
+        "dayofyear": data.dayofyear,
+        "hour": data.hour,
+        "date_str": date_str,
+    }
 
     system_prompt = f"""You are an expert Power Grid AI Agent analyzing regional energy load metrics for PJM East (PJME).
 
@@ -357,123 +587,63 @@ async def energy_copilot(data: CopilotRequest):
   followed by concrete dispatch actions (MW curtailment, ramping, or reserve margin adjustments).
 """
 
-    try:
-        # Build LangChain message chain
-        langchain_messages = [SystemMessage(content=system_prompt)]
-        for msg in data.chat_history:
-            role = msg.get("role")
-            text = msg.get("text") or msg.get("content") or ""
-            if not text or role not in ("user", "assistant"):
-                continue
-            if role == "user":
-                langchain_messages.append(HumanMessage(content=text))
-            elif role == "assistant":
-                langchain_messages.append(AIMessage(content=text))
+    active_forecast_block = (
+        f"[ACTIVE FORECAST JOB TELEMETRY]:\n"
+        f"- Target Calendar Date: {date_str} (Year: {data.year}, Month: {data.month}, Day of Year: {data.dayofyear})\n"
+        f"- Target Operating Hour: {data.hour:02d}:00\n"
+        f"- Machine Learning Demand Forecast: {data.current_prediction:.2f} MW\n"
+        f"- Day of Week Index: {data.dayofweek} (Weekend: {'Yes' if data.is_weekend == 1 else 'No'})\n"
+        f"- Historical Lags: 1h ago: {data.lag_1_hour:.2f} MW | 24h ago: {data.lag_24_hours:.2f} MW | 7d ago: {data.lag_7_days:.2f} MW\n"
+        f"- Trends: Rolling 24h: {data.rolling_mean_24h:.2f} MW | Rolling 7d: {data.rolling_mean_7d:.2f} MW\n"
+        f"NOTE: The operator is analyzing THIS active forecast job. Disregard any prior dates or numbers from earlier conversation turns.\n"
+    )
 
-        # Bedrock Converse requires conversations to lead with human/user messages
-        while len(langchain_messages) > 1 and isinstance(langchain_messages[1], AIMessage):
-            langchain_messages.pop(1)
+    bedrock_messages = build_bedrock_messages(data.chat_history, active_forecast_block)
+    if not bedrock_messages:
+        if data.stream:
+            def empty_err():
+                yield f"data: {json.dumps({'type': 'error', 'message': 'No valid messages in chat history.'})}\n\n"
+            return StreamingResponse(empty_err(), media_type="text/event-stream")
+        return {"status": "error", "message": "No valid messages in chat history."}
 
-        if not any(isinstance(m, HumanMessage) for m in langchain_messages):
-            return {"status": "error", "message": "No valid messages in chat history."}
-
-        active_forecast_block = (
-            f"[ACTIVE FORECAST JOB TELEMETRY]:\n"
-            f"- Target Calendar Date: {date_str} (Year: {data.year}, Month: {data.month}, Day of Year: {data.dayofyear})\n"
-            f"- Target Operating Hour: {data.hour:02d}:00\n"
-            f"- Machine Learning Demand Forecast: {data.current_prediction:.2f} MW\n"
-            f"- Day of Week Index: {data.dayofweek} (Weekend: {'Yes' if data.is_weekend == 1 else 'No'})\n"
-            f"- Historical Lags: 1h ago: {data.lag_1_hour:.2f} MW | 24h ago: {data.lag_24_hours:.2f} MW | 7d ago: {data.lag_7_days:.2f} MW\n"
-            f"- Trends: Rolling 24h: {data.rolling_mean_24h:.2f} MW | Rolling 7d: {data.rolling_mean_7d:.2f} MW\n"
-            f"NOTE: The operator is analyzing THIS active forecast job. Disregard any prior dates or numbers from earlier conversation turns.\n"
+    # If stream requested (default), stream SSE via Bedrock ConverseStream
+    if data.stream:
+        return StreamingResponse(
+            copilot_stream_generator(bedrock_messages, system_prompt, active_date_meta),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+                "Access-Control-Allow-Origin": "*",
+            }
         )
 
-        # Prepend active forecast context to the latest human query so the model always anchors to the active forecast
-        for i in reversed(range(len(langchain_messages))):
-            if isinstance(langchain_messages[i], HumanMessage):
-                langchain_messages[i] = HumanMessage(
-                    content=f"{active_forecast_block}\nOperator Query: {langchain_messages[i].content}"
-                )
-                break
-
-        executed_tool_calls = []
-        ai_response = ""
-
-        # Primary Engine: LangChain with BedrockConverse autonomous tool routing
-        if llm is not None and COPILOT_TOOLS:
-            llm_with_tools = llm.bind_tools(COPILOT_TOOLS)
-            current_messages = list(langchain_messages)
-            max_turns = 3
-
-            while max_turns > 0:
-                max_turns -= 1
-                ai_msg = llm_with_tools.invoke(current_messages)
-
-                if not ai_msg.tool_calls:
-                    ai_response = extract_text_from_content(ai_msg.content)
-                    break
-
-                current_messages.append(ai_msg)
-                tool_messages = []
-                for tc in ai_msg.tool_calls:
-                    t_name = tc.get("name")
-                    t_args = tc.get("args") or {}
-
-                    # Ensure tool calls align with the active forecast job
-                    if t_name == "get_historical_weather":
-                        t_args["year"] = data.year
-                        t_args["month"] = data.month
-                        t_args["dayofyear"] = data.dayofyear
-                        t_args["hour"] = data.hour
-                        t_args["date_str"] = date_str
-
-                    fn = COPILOT_TOOLS_MAP.get(t_name)
-                    if fn:
-                        try:
-                            output = fn.invoke(t_args)
-                        except Exception as te:
-                            output = {"status": "error", "message": str(te)}
-                    else:
-                        output = {"status": "error", "message": f"Tool '{t_name}' not found."}
-
-                    executed_tool_calls.append({
-                        "name": t_name,
-                        "input": t_args,
-                        "output": output
+    # Synchronous non-streaming fallback
+    full_text = ""
+    tool_calls = []
+    for chunk in copilot_stream_generator(bedrock_messages, system_prompt, active_date_meta):
+        if chunk.startswith("data: "):
+            try:
+                payload = json.loads(chunk[6:].strip())
+                if payload.get("type") == "token":
+                    full_text += payload.get("text", "")
+                elif payload.get("type") == "tool_call":
+                    tool_calls.append({
+                        "name": payload.get("name"),
+                        "input": payload.get("input"),
+                        "output": payload.get("output")
                     })
-                    tool_messages.append(ToolMessage(content=json.dumps(output), tool_call_id=tc["id"]))
+                elif payload.get("type") == "error":
+                    return {"status": "error", "message": payload.get("message")}
+            except Exception:
+                pass
 
-                current_messages.extend(tool_messages)
-            else:
-                ai_response = extract_text_from_content(ai_msg.content)
-
-            logger.info(f"LAMBDA_COPILOT_SUCCESS | Autonomous tool execution completed ({len(executed_tool_calls)} tools invoked)")
-
-        else:
-            # Fallback to direct boto3 converse if LangChain instance is unavailable
-            bedrock_messages = [
-                {"role": "user" if isinstance(m, HumanMessage) else "assistant",
-                 "content": [{"text": str(m.content)}]}
-                for m in langchain_messages if not isinstance(m, SystemMessage)
-            ]
-            boto_resp = bedrock_client.converse(
-                modelId=BEDROCK_MODEL_ID,
-                messages=bedrock_messages,
-                system=[{"text": system_prompt}],
-                inferenceConfig={"maxTokens": 2048, "temperature": 0.2}
-            )
-            ai_response = boto_resp["output"]["message"]["content"][0]["text"]
-            logger.info("LAMBDA_COPILOT_SUCCESS | Direct Bedrock Converse responded")
-
-        return {
-            "response": ai_response,
-            "status": "success",
-            "tool_calls": executed_tool_calls
-        }
-
-    except Exception as e:
-        logger.error(f"LAMBDA_COPILOT_CRASH | Error: {str(e)}")
-        return {"status": "error", "message": f"Co-Pilot operational glitch: {str(e)}"}
+    return {
+        "response": full_text,
+        "status": "success",
+        "tool_calls": tool_calls
+    }
 
 
 # 6. THE SERVERLESS BRIDGE HANDLER
