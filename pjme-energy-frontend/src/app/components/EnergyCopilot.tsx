@@ -123,7 +123,10 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    chat_history: nextMessages,
+                    chat_history: nextMessages.map(m => ({
+                        role: m.role,
+                        text: m.text || ''
+                    })),
                     current_prediction: currentMetrics.prediction_mw || 0,
                     hour: currentMetrics.hour,
                     dayofweek: currentMetrics.dayofweek,
@@ -149,7 +152,11 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
                     tool_calls: data.tool_calls || []
                 }]);
             } else {
-                const errorMsg = data?.message || data?.detail || data?.Message || "Temporary grid service glitch. Please resend your query.";
+                const errorMsg = typeof data?.detail === 'string'
+                    ? data.detail
+                    : Array.isArray(data?.detail)
+                        ? data.detail.map((d: any) => d.msg || JSON.stringify(d)).join(', ')
+                        : data?.message || data?.Message || "Temporary grid service glitch. Please resend your query.";
                 setMessages(prev => [...prev, { role: 'assistant', text: `Glitch: ${errorMsg}` }]);
             }
         } catch (error) {

@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from typing import Any
 from mangum import Mangum
 import joblib
 import pandas as pd
@@ -304,7 +305,7 @@ class EnergyPredictionRequest(BaseModel):
     rolling_mean_7d: float = Field(..., description="Rolling mean energy consumption over last 7 days (KWH)")
 
 class CopilotRequest(BaseModel):
-    chat_history: list[dict[str, str]]
+    chat_history: list[dict[str, Any]]
     current_prediction: float
     hour: int
     dayofweek: int
