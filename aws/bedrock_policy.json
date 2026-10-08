@@ -9,9 +9,7 @@
         "bedrock:InvokeModelWithResponseStream"
       ],
       "Resource": [
-        "arn:aws:bedrock:ap-south-1::foundation-model/google.gemma-3-12b-it",
-        "arn:aws:bedrock:ap-south-1::foundation-model/google.gemma-3-4b-it",
-        "arn:aws:bedrock:ap-south-1::foundation-model/*"
+        "arn:aws:bedrock:ap-south-1::foundation-model/openai.gpt-oss-20b-1:0"
       ]
     }
   ]
