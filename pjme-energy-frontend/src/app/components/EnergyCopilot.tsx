@@ -100,7 +100,6 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
     ]);
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
-    const [isStreaming, setIsStreaming] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const prevPredictionRef = useRef<number | undefined>(undefined);
 
@@ -124,8 +123,8 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
     }, [currentMetrics.prediction_mw, currentMetrics.year, currentMetrics.month, currentMetrics.dayofyear, currentMetrics.hour, activeDateStr]);
 
     useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: isStreaming ? 'auto' : 'smooth' });
-    }, [messages, loading, isStreaming]);
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [messages, loading]);
 
     const handleClearChat = () => {
         setMessages([
@@ -154,7 +153,7 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
                 method: 'POST',
                 headers: { 
                     'Content-Type': 'application/json',
-                    'Accept': 'text/event-stream, application/json'
+                    'Accept': 'application/json'
                 },
                 body: JSON.stringify({
                     chat_history: nextMessages.map(m => ({
@@ -174,7 +173,6 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
                     lag_7_days: currentMetrics.lag_7_days,
                     rolling_mean_24h: currentMetrics.rolling_mean_24h,
                     rolling_mean_7d: currentMetrics.rolling_mean_7d,
-                    stream: true,
                 }),
             });
 
@@ -182,109 +180,26 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
                 throw new Error(`HTTP ${response.status}: Failed to reach Grid Agent`);
             }
 
-            const contentType = response.headers.get('content-type') || '';
+            const data = await response.json();
 
-            if (contentType.includes('text/event-stream') && response.body) {
-                // Initialize assistant response container for token-by-token streaming
-                setMessages(prev => [...prev, { role: 'assistant', text: '', tool_calls: [] }]);
-                setIsStreaming(true);
-
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-
-                try {
-                    while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) break;
-
-                        buffer += decoder.decode(value, { stream: true });
-                        const lines = buffer.split('\n');
-                        buffer = lines.pop() || '';
-
-                        for (const line of lines) {
-                            const trimmed = line.trim();
-                            if (!trimmed || !trimmed.startsWith('data:')) continue;
-                            const payloadStr = trimmed.slice(5).trim();
-                            if (!payloadStr || payloadStr === '[DONE]') continue;
-
-                            try {
-                                const ev = JSON.parse(payloadStr);
-
-                                if (ev.type === 'token' && typeof ev.text === 'string') {
-                                    setMessages(prev => {
-                                        const next = [...prev];
-                                        const last = next[next.length - 1];
-                                        if (last && last.role === 'assistant') {
-                                            next[next.length - 1] = {
-                                                ...last,
-                                                text: last.text + ev.text
-                                            };
-                                        }
-                                        return next;
-                                    });
-                                } else if (ev.type === 'tool_call') {
-                                    setMessages(prev => {
-                                        const next = [...prev];
-                                        const last = next[next.length - 1];
-                                        if (last && last.role === 'assistant') {
-                                            const prevTools = last.tool_calls || [];
-                                            next[next.length - 1] = {
-                                                ...last,
-                                                tool_calls: [...prevTools, {
-                                                    name: ev.name,
-                                                    input: ev.input || {},
-                                                    output: ev.output || {}
-                                                }]
-                                            };
-                                        }
-                                        return next;
-                                    });
-                                } else if (ev.type === 'error') {
-                                    setMessages(prev => {
-                                        const next = [...prev];
-                                        const last = next[next.length - 1];
-                                        if (last && last.role === 'assistant') {
-                                            next[next.length - 1] = {
-                                                ...last,
-                                                text: (last.text ? last.text + '\n\n' : '') + `⚠️ **Operational Glitch:** ${ev.message}`
-                                            };
-                                        }
-                                        return next;
-                                    });
-                                }
-                            } catch (parseErr) {
-                                console.error('SSE payload parse error:', parseErr, payloadStr);
-                            }
-                        }
-                    }
-                } finally {
-                    setIsStreaming(false);
-                }
+            if (data.status === 'success') {
+                setMessages(prev => [...prev, { 
+                    role: 'assistant', 
+                    text: data.response,
+                    tool_calls: data.tool_calls || []
+                }]);
             } else {
-                // Backward-compatible JSON response handler
-                const data = await response.json();
-
-                if (data.status === 'success') {
-                    setMessages(prev => [...prev, { 
-                        role: 'assistant', 
-                        text: data.response,
-                        tool_calls: data.tool_calls || []
-                    }]);
-                } else {
-                    const errorMsg = typeof data?.detail === 'string'
-                        ? data.detail
-                        : Array.isArray(data?.detail)
-                            ? data.detail.map((d: any) => d.msg || JSON.stringify(d)).join(', ')
-                            : data?.message || data?.Message || "Temporary grid service glitch. Please resend your query.";
-                    setMessages(prev => [...prev, { role: 'assistant', text: `Glitch: ${errorMsg}` }]);
-                }
+                const errorMsg = typeof data?.detail === 'string'
+                    ? data.detail
+                    : Array.isArray(data?.detail)
+                        ? data.detail.map((d: any) => d.msg || JSON.stringify(d)).join(', ')
+                        : data?.message || data?.Message || "Temporary grid service glitch. Please resend your query.";
+                setMessages(prev => [...prev, { role: 'assistant', text: `Glitch: ${errorMsg}` }]);
             }
         } catch (error: any) {
             setMessages(prev => [...prev, { role: 'assistant', text: `Failed to communicate with the grid intelligence engine: ${error?.message || 'Please retry.'}` }]);
         } finally {
             setLoading(false);
-            setIsStreaming(false);
         }
     };
 
@@ -331,7 +246,7 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
                                 {!msg.text && (!msg.tool_calls || msg.tool_calls.length === 0) ? (
                                     <div className="flex items-center gap-2 text-slate-400 text-sm py-1 font-mono">
                                         <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-                                        Connecting to Grid Agent stream...
+                                        Connecting to Grid Agent...
                                     </div>
                                 ) : (
                                     <>
@@ -370,11 +285,6 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
                                             {msg.text}
                                         </ReactMarkdown>
 
-                                        {/* Real-time Streaming Cursor */}
-                                        {isStreaming && idx === messages.length - 1 && (
-                                            <span className="inline-block w-2 h-4 ml-1.5 bg-emerald-400 animate-pulse align-middle rounded-sm shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
-                                        )}
-
                                         {/* Interactive Tool Calls Component */}
                                         <ToolCallsBadge toolCalls={msg.tool_calls} />
                                     </>
@@ -383,7 +293,7 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
                         )}
                     </div>
                 ))}
-                {loading && !isStreaming && (
+                {loading && (
                     <div className="flex justify-start">
                         <div className="bg-slate-800 text-slate-300 text-sm rounded-xl px-4 py-3 border border-slate-700/80 animate-pulse flex items-center gap-2">
                             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>

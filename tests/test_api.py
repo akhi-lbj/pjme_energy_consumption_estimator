@@ -54,15 +54,18 @@ def test_historical_weather_tool():
 
 from unittest.mock import patch
 
-def test_copilot_streaming_sse():
+def test_copilot_direct_response():
     from app import app as serverless_app
-    mock_events = [
-        {"contentBlockStart": {"start": {}, "contentBlockIndex": 0}},
-        {"contentBlockDelta": {"delta": {"text": "Hello, Power Grid!"}, "contentBlockIndex": 0}},
-        {"contentBlockStop": {"contentBlockIndex": 0}},
-        {"messageStop": {"stopReason": "end_turn"}}
-    ]
-    with patch("app.bedrock_client.converse_stream", return_value={"stream": iter(mock_events)}):
+    mock_resp = {
+        "stopReason": "end_turn",
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [{"text": "Hello, Power Grid! Operational recommendation: monitor load."}]
+            }
+        }
+    }
+    with patch("app.bedrock_client.converse", return_value=mock_resp):
         with TestClient(serverless_app) as client:
             payload = {
                 "chat_history": [{"role": "user", "text": "Say hello in 3 words."}],
@@ -78,30 +81,44 @@ def test_copilot_streaming_sse():
                 "lag_24_hours": 24500.0,
                 "lag_7_days": 23900.0,
                 "rolling_mean_24h": 24200.0,
-                "rolling_mean_7d": 24100.0,
-                "stream": True
+                "rolling_mean_7d": 24100.0
             }
-            with client.stream("POST", "/copilot", json=payload) as response:
-                assert response.status_code == 200
-                assert "text/event-stream" in response.headers.get("content-type", "")
-                lines = [line for line in response.iter_lines() if line]
-                assert any("data: " in line for line in lines)
-                assert any('"type": "token"' in line for line in lines)
-                assert any('"type": "done"' in line for line in lines)
+            response = client.post("/copilot", json=payload)
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "success"
+            assert "Hello, Power Grid!" in data["response"]
+            assert data["tool_calls"] == []
 
-def test_copilot_streaming_tool_call():
+def test_copilot_tool_call():
     from app import app as serverless_app
-    turn1_events = [
-        {"contentBlockStart": {"start": {"toolUse": {"toolUseId": "tu_1", "name": "get_live_weather"}}, "contentBlockIndex": 0}},
-        {"contentBlockDelta": {"delta": {"toolUse": {"input": '{"lat": 39.95, "lon": -75.16}'}}, "contentBlockIndex": 0}},
-        {"contentBlockStop": {"contentBlockIndex": 0}},
-        {"messageStop": {"stopReason": "tool_use"}}
-    ]
-    turn2_events = [
-        {"contentBlockDelta": {"delta": {"text": "Weather telemetry integrated."}, "contentBlockIndex": 0}},
-        {"messageStop": {"stopReason": "end_turn"}}
-    ]
-    with patch("app.bedrock_client.converse_stream", side_effect=[{"stream": iter(turn1_events)}, {"stream": iter(turn2_events)}]):
+    turn1_resp = {
+        "stopReason": "tool_use",
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "toolUseId": "tu_1",
+                            "name": "get_live_weather",
+                            "input": {"lat": 39.95, "lon": -75.16}
+                        }
+                    }
+                ]
+            }
+        }
+    }
+    turn2_resp = {
+        "stopReason": "end_turn",
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [{"text": "Weather telemetry integrated. Load looks stable."}]
+            }
+        }
+    }
+    with patch("app.bedrock_client.converse", side_effect=[turn1_resp, turn2_resp]):
         with TestClient(serverless_app) as client:
             payload = {
                 "chat_history": [{"role": "user", "text": "Check live weather."}],
@@ -117,15 +134,15 @@ def test_copilot_streaming_tool_call():
                 "lag_24_hours": 24500.0,
                 "lag_7_days": 23900.0,
                 "rolling_mean_24h": 24200.0,
-                "rolling_mean_7d": 24100.0,
-                "stream": True
+                "rolling_mean_7d": 24100.0
             }
-            with client.stream("POST", "/copilot", json=payload) as response:
-                assert response.status_code == 200
-                lines = [line for line in response.iter_lines() if line]
-                assert any('"type": "tool_call"' in line for line in lines)
-                assert any('"type": "token"' in line for line in lines)
-                assert any('"type": "done"' in line for line in lines)
+            response = client.post("/copilot", json=payload)
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "success"
+            assert len(data["tool_calls"]) == 1
+            assert data["tool_calls"][0]["name"] == "get_live_weather"
+            assert data["response"] == "Weather telemetry integrated. Load looks stable."
 
 def test_copilot_empty_history():
     from app import app as serverless_app

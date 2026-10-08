@@ -1,7 +1,6 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Any
 from mangum import Mangum
@@ -348,7 +347,7 @@ class CopilotRequest(BaseModel):
     lag_7_days: float
     rolling_mean_24h: float
     rolling_mean_7d: float
-    stream: bool = True
+    stream: bool = False
 
 
 # 5. API Endpoints
@@ -432,136 +431,8 @@ def build_bedrock_messages(chat_history: list[dict[str, Any]], active_forecast_b
     ]
 
 
-def copilot_stream_generator(bedrock_messages: list[dict[str, Any]], system_prompt: str, active_date_meta: dict[str, Any]):
-    """
-    Streams tokens and tool telemetry in real time using AWS Bedrock ConverseStream API over Server-Sent Events (SSE).
-    """
-    current_messages = list(bedrock_messages)
-    max_turns = 4
-    executed_tools = []
-
-    try:
-        while max_turns > 0:
-            max_turns -= 1
-            try:
-                stream_response = bedrock_client.converse_stream(
-                    modelId=BEDROCK_MODEL_ID,
-                    messages=current_messages,
-                    system=[{"text": system_prompt}],
-                    toolConfig=BEDROCK_TOOLS_CONFIG,
-                    inferenceConfig={"maxTokens": 2048, "temperature": 0.2}
-                )
-            except Exception as exc:
-                logger.error(f"BEDROCK_STREAM_CRASH | {exc}")
-                yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
-                return
-
-            content_blocks = {}
-            stop_reason = None
-
-            for event in stream_response.get("stream", []):
-                if "contentBlockStart" in event:
-                    idx = event["contentBlockStart"]["contentBlockIndex"]
-                    content_blocks[idx] = event["contentBlockStart"]["start"]
-
-                elif "contentBlockDelta" in event:
-                    idx = event["contentBlockDelta"]["contentBlockIndex"]
-                    delta = event["contentBlockDelta"]["delta"]
-
-                    # Stream text token directly to client for near-zero perceived latency
-                    if "text" in delta:
-                        token_text = delta["text"]
-                        if token_text:
-                            yield f"data: {json.dumps({'type': 'token', 'text': token_text})}\n\n"
-
-                    # Accumulate toolUse arguments
-                    if "toolUse" in delta and "input" in delta["toolUse"]:
-                        if idx not in content_blocks:
-                            content_blocks[idx] = {"toolUse": {"input": ""}}
-                        tu = content_blocks[idx].get("toolUse", {})
-                        tu["input"] = tu.get("input", "") + delta["toolUse"]["input"]
-                        content_blocks[idx]["toolUse"] = tu
-
-                elif "contentBlockStop" in event:
-                    pass
-
-                elif "messageStop" in event:
-                    stop_reason = event["messageStop"].get("stopReason")
-
-            # Check if autonomous tool invocation is required
-            if stop_reason == "tool_use":
-                assistant_content = []
-                tool_results = []
-
-                for idx, blk in sorted(content_blocks.items()):
-                    if "toolUse" in blk:
-                        tu = blk["toolUse"]
-                        tu_id = tu.get("toolUseId")
-                        t_name = tu.get("name")
-                        raw_inp = tu.get("input", "{}")
-
-                        try:
-                            t_args = json.loads(raw_inp) if isinstance(raw_inp, str) and raw_inp.strip() else (raw_inp if isinstance(raw_inp, dict) else {})
-                        except Exception:
-                            t_args = {}
-
-                        # Ensure tool parameters synchronize with active forecast session
-                        if t_name == "get_historical_weather":
-                            t_args.setdefault("year", active_date_meta.get("year"))
-                            t_args.setdefault("month", active_date_meta.get("month"))
-                            t_args.setdefault("dayofyear", active_date_meta.get("dayofyear"))
-                            t_args.setdefault("hour", active_date_meta.get("hour"))
-                            t_args.setdefault("date_str", active_date_meta.get("date_str"))
-
-                        # Execute tool
-                        fn = COPILOT_TOOL_FUNCTIONS.get(t_name)
-                        if fn:
-                            try:
-                                output = fn(**t_args)
-                            except Exception as te:
-                                output = {"status": "error", "message": str(te)}
-                        else:
-                            output = {"status": "error", "message": f"Tool '{t_name}' not found."}
-
-                        executed_tools.append({
-                            "name": t_name,
-                            "input": t_args,
-                            "output": output
-                        })
-
-                        # Yield SSE tool call event so UI displays invocation badge in real time
-                        yield f"data: {json.dumps({'type': 'tool_call', 'name': t_name, 'input': t_args, 'output': output})}\n\n"
-
-                        assistant_content.append({
-                            "toolUse": {
-                                "toolUseId": tu_id,
-                                "name": t_name,
-                                "input": t_args
-                            }
-                        })
-                        tool_results.append({
-                            "toolResult": {
-                                "toolUseId": tu_id,
-                                "content": [{"json": output}],
-                                "status": "success" if output.get("status") != "error" else "error"
-                            }
-                        })
-
-                current_messages.append({"role": "assistant", "content": assistant_content})
-                current_messages.append({"role": "user", "content": tool_results})
-            else:
-                break
-
-        logger.info(f"LAMBDA_COPILOT_STREAM_SUCCESS | Stream completed ({len(executed_tools)} tools invoked)")
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
-
-    except Exception as e:
-        logger.error(f"LAMBDA_COPILOT_STREAM_CRASH | {e}")
-        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
-
-
 @app.post("/copilot")
-async def energy_copilot(data: CopilotRequest, request: Request):
+def energy_copilot(data: CopilotRequest):
     # Dynamically derive calendar date from active user input columns
     try:
         target_date = datetime.date(data.year, 1, 1) + datetime.timedelta(days=max(0, data.dayofyear - 1))
@@ -618,49 +489,86 @@ async def energy_copilot(data: CopilotRequest, request: Request):
 
     bedrock_messages = build_bedrock_messages(data.chat_history, active_forecast_block)
     if not bedrock_messages:
-        if data.stream:
-            def empty_err():
-                yield f"data: {json.dumps({'type': 'error', 'message': 'No valid messages in chat history.'})}\n\n"
-            return StreamingResponse(empty_err(), media_type="text/event-stream")
         return {"status": "error", "message": "No valid messages in chat history."}
 
-    # If stream requested (default), stream SSE via Bedrock ConverseStream
-    if data.stream:
-        return StreamingResponse(
-            copilot_stream_generator(bedrock_messages, system_prompt, active_date_meta),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            }
-        )
+    max_turns = 4
+    current_messages = list(bedrock_messages)
+    executed_tool_calls = []
+    ai_response = ""
 
-    # Synchronous non-streaming fallback
-    full_text = ""
-    tool_calls = []
-    for chunk in copilot_stream_generator(bedrock_messages, system_prompt, active_date_meta):
-        if chunk.startswith("data: "):
-            try:
-                payload = json.loads(chunk[6:].strip())
-                if payload.get("type") == "token":
-                    full_text += payload.get("text", "")
-                elif payload.get("type") == "tool_call":
-                    tool_calls.append({
-                        "name": payload.get("name"),
-                        "input": payload.get("input"),
-                        "output": payload.get("output")
-                    })
-                elif payload.get("type") == "error":
-                    return {"status": "error", "message": payload.get("message")}
-            except Exception:
-                pass
+    try:
+        while max_turns > 0:
+            max_turns -= 1
+            resp = bedrock_client.converse(
+                modelId=BEDROCK_MODEL_ID,
+                messages=current_messages,
+                system=[{"text": system_prompt}],
+                toolConfig=BEDROCK_TOOLS_CONFIG,
+                inferenceConfig={"maxTokens": 2048, "temperature": 0.2}
+            )
 
-    return {
-        "response": full_text,
-        "status": "success",
-        "tool_calls": tool_calls
-    }
+            stop_reason = resp.get("stopReason")
+            output_msg = resp.get("output", {}).get("message", {})
+            content_blocks = output_msg.get("content", [])
+
+            if stop_reason == "tool_use":
+                current_messages.append({"role": "assistant", "content": content_blocks})
+                tool_results = []
+                for blk in content_blocks:
+                    if "toolUse" in blk:
+                        tu = blk["toolUse"]
+                        tu_id = tu.get("toolUseId")
+                        t_name = tu.get("name")
+                        t_args = tu.get("input") or {}
+
+                        if t_name == "get_historical_weather":
+                            t_args.setdefault("year", active_date_meta.get("year"))
+                            t_args.setdefault("month", active_date_meta.get("month"))
+                            t_args.setdefault("dayofyear", active_date_meta.get("dayofyear"))
+                            t_args.setdefault("hour", active_date_meta.get("hour"))
+                            t_args.setdefault("date_str", active_date_meta.get("date_str"))
+
+                        fn = COPILOT_TOOL_FUNCTIONS.get(t_name)
+                        if fn:
+                            try:
+                                output = fn(**t_args)
+                            except Exception as te:
+                                output = {"status": "error", "message": str(te)}
+                        else:
+                            output = {"status": "error", "message": f"Tool '{t_name}' not found."}
+
+                        executed_tool_calls.append({
+                            "name": t_name,
+                            "input": t_args,
+                            "output": output
+                        })
+
+                        tool_results.append({
+                            "toolResult": {
+                                "toolUseId": tu_id,
+                                "content": [{"json": output}],
+                                "status": "success" if output.get("status") != "error" else "error"
+                            }
+                        })
+
+                current_messages.append({"role": "user", "content": tool_results})
+            else:
+                for blk in content_blocks:
+                    if "text" in blk:
+                        ai_response += blk["text"]
+                break
+
+        logger.info(f"LAMBDA_COPILOT_SUCCESS | Agent completed ({len(executed_tool_calls)} tools invoked)")
+
+        return {
+            "response": ai_response,
+            "status": "success",
+            "tool_calls": executed_tool_calls
+        }
+
+    except Exception as e:
+        logger.error(f"LAMBDA_COPILOT_CRASH | {e}")
+        return {"status": "error", "message": f"Grid Copilot operational glitch: {str(e)}"}
 
 
 # 6. THE SERVERLESS BRIDGE HANDLER
