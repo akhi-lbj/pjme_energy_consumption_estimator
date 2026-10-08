@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 from src.main import app
-from app import get_live_weather, get_historical_weather, simulate_what_if_scenario
+from app import get_live_weather, get_historical_weather
 
 def test_predict_success():
     # 'with' forces FastAPI to trigger the lifespan startup logic cleanly before testing
@@ -51,10 +51,3 @@ def test_historical_weather_tool():
     assert "temperature_celsius" in weather
     assert "temperature_fahrenheit" in weather
     assert "target_date" in weather
-
-def test_simulate_what_if_tool():
-    sim = simulate_what_if_scenario(temp_delta_f=5.0, industrial_curtailment_mw=500.0, baseline_prediction_mw=30000.0)
-    assert sim["status"] == "success"
-    assert "projected_metrics" in sim
-    assert "contingency_reserve_mw" in sim["projected_metrics"]
-    assert "reserve_margin_percent" in sim["projected_metrics"]

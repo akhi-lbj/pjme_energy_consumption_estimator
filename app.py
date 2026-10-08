@@ -206,49 +206,6 @@ def get_historical_weather(
         }
 
 
-def simulate_what_if_scenario(
-    temp_delta_f: float = 0.0,
-    industrial_curtailment_mw: float = 0.0,
-    baseline_prediction_mw: float = 30000.0,
-    operating_generation_capacity_mw: float = 35000.0
-) -> dict:
-    """
-    Simulates power grid contingency scenarios by evaluating temperature variations (temp_delta_f)
-    and industrial load curtailment (industrial_curtailment_mw) against baseline forecast and generation capacity.
-    """
-    thermal_load_impact_mw = round(baseline_prediction_mw * (temp_delta_f * 0.018), 2)
-    curtailment_mw = round(float(industrial_curtailment_mw), 2)
-    adjusted_prediction_mw = round(baseline_prediction_mw + thermal_load_impact_mw - curtailment_mw, 2)
-    
-    contingency_reserve_mw = round(operating_generation_capacity_mw - adjusted_prediction_mw, 2)
-    reserve_margin_pct = round((contingency_reserve_mw / operating_generation_capacity_mw) * 100, 2)
-    
-    if reserve_margin_pct < 10.0:
-        grid_status = "CRITICAL - Immediate Peaker Activation Required"
-    elif reserve_margin_pct < 15.0:
-        grid_status = "STRESSED - Spinning Reserve Alert"
-    else:
-        grid_status = "NOMINAL - Operating Reserve Margin Adequate"
-
-    return {
-        "status": "success",
-        "simulation_parameters": {
-            "temperature_delta_fahrenheit": temp_delta_f,
-            "industrial_curtailment_mw": curtailment_mw,
-            "baseline_forecast_mw": baseline_prediction_mw,
-            "operating_generation_capacity_mw": operating_generation_capacity_mw
-        },
-        "projected_metrics": {
-            "thermal_load_impact_mw": thermal_load_impact_mw,
-            "curtailment_reduction_mw": curtailment_mw,
-            "simulated_demand_mw": adjusted_prediction_mw,
-            "contingency_reserve_mw": contingency_reserve_mw,
-            "reserve_margin_percent": reserve_margin_pct,
-            "grid_reliability_status": grid_status
-        }
-    }
-
-
 def extract_text_from_content(content) -> str:
     """Extracts clean markdown text from LangChain content block structures."""
     if isinstance(content, str):
@@ -271,8 +228,7 @@ def extract_text_from_content(content) -> str:
 try:
     COPILOT_TOOLS = [
         tool(get_historical_weather),
-        tool(get_live_weather),
-        tool(simulate_what_if_scenario)
+        tool(get_live_weather)
     ]
     COPILOT_TOOLS_MAP = {t.name: t for t in COPILOT_TOOLS}
 except Exception as e:
@@ -364,22 +320,6 @@ def predict_energy(payload: EnergyPredictionRequest, request: Request):
         return {"status": "error", "message": str(e)}
 
 
-@app.post("/simulate")
-def simulate_endpoint(
-    temp_delta_f: float = 0.0,
-    industrial_curtailment_mw: float = 0.0,
-    baseline_prediction_mw: float = 30000.0,
-    operating_generation_capacity_mw: float = 35000.0
-):
-    """Direct API endpoint for power grid contingency scenario simulations."""
-    return simulate_what_if_scenario(
-        temp_delta_f=temp_delta_f,
-        industrial_curtailment_mw=industrial_curtailment_mw,
-        baseline_prediction_mw=baseline_prediction_mw,
-        operating_generation_capacity_mw=operating_generation_capacity_mw
-    )
-
-
 @app.post("/copilot")
 async def energy_copilot(data: CopilotRequest):
     # Dynamically derive calendar date from active user input columns
@@ -404,11 +344,10 @@ async def energy_copilot(data: CopilotRequest):
 - Statistical Trends: Rolling 24h: {data.rolling_mean_24h:.2f} MW | Rolling 7d: {data.rolling_mean_7d:.2f} MW
 
 2. Autonomous Tool Directives:
-- You have access to tools for historical weather telemetry (get_historical_weather), live weather telemetry (get_live_weather), and what-if grid contingency simulation (simulate_what_if_scenario).
+- You have access to tools for historical weather telemetry (get_historical_weather) and real-time live weather telemetry (get_live_weather).
 - Autonomously select and execute only the tools necessary to fulfill the operator's prompt.
 - If the operator instructs not to use live weather, or only to provide historical data, respect their directive and invoke only the appropriate tool.
-- If the user asks for what-if scenarios (e.g., temperature deviations, industrial load curtailment), invoke simulate_what_if_scenario.
-- If no external data or simulation is needed, do not call any tools and respond directly.
+- If no external meteorological data is needed, do not call any tools and respond directly.
 
 3. Presentation & Recommendation Standards:
 - Present numerical comparisons and weather telemetry in clean, structured Markdown tables.
@@ -487,8 +426,6 @@ async def energy_copilot(data: CopilotRequest):
                         t_args["dayofyear"] = data.dayofyear
                         t_args["hour"] = data.hour
                         t_args["date_str"] = date_str
-                    elif t_name == "simulate_what_if_scenario":
-                        t_args.setdefault("baseline_prediction_mw", data.current_prediction)
 
                     fn = COPILOT_TOOLS_MAP.get(t_name)
                     if fn:

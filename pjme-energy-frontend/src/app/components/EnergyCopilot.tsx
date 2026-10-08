@@ -306,10 +306,10 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
                 </button>
                 <button
                     type="button"
-                    onClick={() => handleQuickPrompt("Simulate contingency scenario if temperature rises by 5 degrees and we curtail 500 MW.")}
+                    onClick={() => handleQuickPrompt("Provide actionable operational dispatch recommendations for this forecast.")}
                     className="whitespace-nowrap px-2.5 py-1 rounded-full bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-700 hover:border-emerald-500/50 transition-all cursor-pointer text-[11px]"
                 >
-                    ⚡ What-If Scenario
+                    📋 Dispatch Actions
                 </button>
             </div>
 
