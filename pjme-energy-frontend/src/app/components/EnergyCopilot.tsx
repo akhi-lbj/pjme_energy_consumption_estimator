@@ -149,10 +149,11 @@ export default function EnergyCopilot({ currentMetrics }: { currentMetrics: Metr
                     tool_calls: data.tool_calls || []
                 }]);
             } else {
-                setMessages(prev => [...prev, { role: 'assistant', text: `Glitch: ${data.message}` }]);
+                const errorMsg = data?.message || data?.detail || data?.Message || "Temporary grid service glitch. Please resend your query.";
+                setMessages(prev => [...prev, { role: 'assistant', text: `Glitch: ${errorMsg}` }]);
             }
         } catch (error) {
-            setMessages(prev => [...prev, { role: 'assistant', text: "Failed to communicate with the grid intelligence engine." }]);
+            setMessages(prev => [...prev, { role: 'assistant', text: "Failed to communicate with the grid intelligence engine. Please retry." }]);
         } finally {
             setLoading(false);
         }
