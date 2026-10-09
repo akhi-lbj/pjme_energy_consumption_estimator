@@ -121,11 +121,9 @@ The web dashboard is built with Next.js 16 (App Router), React, and Vanilla CSS/
 
 * **Quick Sample Auto-Generators**:
   - `⚡ Today (Now)`: Auto-populates current calendar features without overwriting historical lag indicators.
-  - `⏩ Next Day`: Pre-fills tomorrow's temporal vectors for day-ahead dispatch planning.
   - `🏛️ 2016 Benchmark`: Restores the historical reference case (Jan 4, 2016, 18:00).
 * **Interactive Calendar Resolver**:
-  - `<input type="date">` restricted to today and tomorrow (`max={maxCalendarDateStr}`).
-  - Automatically derives `dayofweek`, `quarter`, `month`, `year`, `dayofyear`, and `is_weekend`.
+  - `<input type="date">` with real-time automatic derivation of `dayofweek`, `quarter`, `month`, `year`, `dayofyear`, and `is_weekend`.
 * **Strict Validation & Error Surfacing**:
   - Validates constraints (e.g. `Hour: enter between 0 and 23`, `Month: enter between 1 and 12`).
   - Prominently displays formatted field-level errors directly inside the **Inference Output** panel.

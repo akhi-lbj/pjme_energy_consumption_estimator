@@ -11,13 +11,6 @@ const formatDateToISO = (d: Date): string => {
   return `${y}-${m}-${day}`;
 };
 
-// Next day (tomorrow) limit
-const getTomorrowDate = (): Date => {
-  const d = new Date();
-  d.setDate(d.getDate() + 1);
-  return d;
-};
-
 export default function EnergyDashboard() {
   // 1. Core input matrix state mapping perfectly to backend schema parameters
   const [formData, setFormData] = useState({
@@ -39,8 +32,6 @@ export default function EnergyDashboard() {
   const [prediction, setPrediction] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-
-  const maxCalendarDateStr = formatDateToISO(getTomorrowDate());
 
   // Function to calculate all 7 calendar telemetry metrics from a Date object & hour
   const deriveCalendarMetrics = (dateObj: Date, hourVal?: number) => {
@@ -73,7 +64,7 @@ export default function EnergyDashboard() {
   };
 
   // Auto-generate buttons handler: fills only the 7 calendar fields; leaves lag/rolling means untouched
-  const handleAutoGenerate = (target: 'today' | 'tomorrow' | 'benchmark') => {
+  const handleAutoGenerate = (target: 'today' | 'benchmark') => {
     setError('');
     if (target === 'benchmark') {
       const benchmarkDate = new Date(2016, 0, 4);
@@ -85,7 +76,7 @@ export default function EnergyDashboard() {
       return;
     }
 
-    const targetDate = target === 'today' ? new Date() : getTomorrowDate();
+    const targetDate = new Date();
     const isoStr = formatDateToISO(targetDate);
     setCalendarDate(isoStr);
 
@@ -104,13 +95,6 @@ export default function EnergyDashboard() {
     if (parts.length !== 3) return;
 
     const selectedDate = new Date(parts[0], parts[1] - 1, parts[2]);
-    const tomorrowLimit = getTomorrowDate();
-    tomorrowLimit.setHours(23, 59, 59, 999);
-
-    if (selectedDate.getTime() > tomorrowLimit.getTime()) {
-      setError(`Forecast Horizon Notice: Predictions are supported up to today and the next day (${maxCalendarDateStr}) only.`);
-      return;
-    }
 
     setError('');
     setCalendarDate(val);
@@ -169,21 +153,6 @@ export default function EnergyDashboard() {
     if (isNaN(iw) || (iw !== 0 && iw !== 1)) {
       setError('Is weekend: enter 0 (weekday) or 1 (weekend).');
       return;
-    }
-
-    // 2. Calendar Horizon Check (Up to today and next day only)
-    try {
-      const derivedDate = new Date(formData.year, 0, 1);
-      derivedDate.setDate(derivedDate.getDate() + (formData.dayofyear - 1));
-      const tomorrowLimit = getTomorrowDate();
-      tomorrowLimit.setHours(23, 59, 59, 999);
-
-      if (derivedDate.getTime() > tomorrowLimit.getTime()) {
-        setError(`Forecast Horizon Exceeded: Target date (${derivedDate.toLocaleDateString()}) is beyond tomorrow. Predictions are allowed up to today and next day only.`);
-        return;
-      }
-    } catch {
-      // Ignore date calculation errors
     }
 
     setLoading(true);
@@ -282,14 +251,6 @@ export default function EnergyDashboard() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleAutoGenerate('tomorrow')}
-                      className="px-2.5 py-1.5 rounded-lg text-xs font-mono font-semibold bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer shadow-sm"
-                      title="Auto-fill calendar fields for Tomorrow (Next Day)"
-                    >
-                      <span>⏩</span> Next Day
-                    </button>
-                    <button
-                      type="button"
                       onClick={() => handleAutoGenerate('benchmark')}
                       className="px-2 py-1.5 rounded-lg text-xs font-mono text-slate-400 hover:text-slate-200 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/80 transition-all flex items-center gap-1 active:scale-95 cursor-pointer"
                       title="Reset to 2016 Archive Benchmark"
@@ -307,7 +268,6 @@ export default function EnergyDashboard() {
                     <input
                       type="date"
                       value={calendarDate}
-                      max={maxCalendarDateStr}
                       onChange={handleCalendarDateChange}
                       className="bg-slate-900 border border-slate-700/80 rounded-md px-2.5 py-1 text-emerald-300 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
                     />
