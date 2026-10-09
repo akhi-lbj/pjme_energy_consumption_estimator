@@ -9,7 +9,9 @@
         "bedrock:InvokeModelWithResponseStream"
       ],
       "Resource": [
-        "arn:aws:bedrock:ap-south-1::foundation-model/openai.gpt-oss-20b-1:0"
+        "arn:aws:bedrock:ap-south-1::foundation-model/qwen.qwen3-32b-v1:0",
+        "arn:aws:bedrock:ap-south-1::foundation-model/qwen.*",
+        "arn:aws:bedrock:ap-south-1::foundation-model/*"
       ]
     }
   ]

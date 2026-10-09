@@ -32,7 +32,7 @@ graph TB
         API["app.py FastAPI & Mangum"]
         Model -->|Inference Engine| API
         API -->|Async Telemetry Stream| CW["AWS CloudWatch via Watchtower"]
-        API -->|Bedrock Converse API| Bedrock["Amazon Bedrock (openai.gpt-oss-20b-1:0)"]
+        API -->|Bedrock Converse API| Bedrock["Amazon Bedrock (qwen.qwen3-32b-v1:0)"]
         API -->|Meteorological Archive API| HistWeather["Open-Meteo Archive API"]
         API -->|Live Telemetry API| LiveWeather["Open-Meteo High-Resolution API"]
         API -->|Hourly Forecast API| ForeWeather["Open-Meteo Forecast API"]
@@ -86,9 +86,9 @@ The figure below illustrates out-of-sample predictions vs. true demand across a 
 
 ## ⚡ Autonomous AI Grid Agent (Amazon Bedrock)
 
-The application embeds an autonomous grid operator copilot powered by **Amazon Bedrock Converse API** utilizing `openai.gpt-oss-20b-1:0`.
+The application embeds an autonomous grid operator copilot powered by **Amazon Bedrock Converse API** utilizing `qwen.qwen3-32b-v1:0`.
 
-`	ext
+```text
 Operator Prompt ──> POST /copilot ──> Bedrock Converse Loop
                                             │
          ┌──────────────────────────────────┼──────────────────────────────────┐

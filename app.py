@@ -35,8 +35,8 @@ try:
 except Exception as e:
     logger.warning(f"Bedrock runtime binding skipped: {e}")
 
-# Bedrock Model Identifier (OpenAI GPT-OSS 20B with native autonomous tool calling)
-BEDROCK_MODEL_ID = "openai.gpt-oss-20b-1:0"
+# Bedrock Model Identifier (Qwen 3 32B with native autonomous tool calling in ap-south-1)
+BEDROCK_MODEL_ID = "qwen.qwen3-32b-v1:0"
 
 # Initialize LangChain ChatBedrockConverse client (AWS Bedrock Converse API integration)
 try:
@@ -49,7 +49,7 @@ try:
         temperature=0.2,
         max_tokens=2048
     )
-    logger.info("LangChain ChatBedrockConverse successfully initialized for openai.gpt-oss-20b-1:0")
+    logger.info("LangChain ChatBedrockConverse successfully initialized for qwen.qwen3-32b-v1:0")
 except Exception as e:
     logger.warning(f"LangChain ChatBedrockConverse binding fallback: {e}")
     llm = None

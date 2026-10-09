@@ -90,7 +90,7 @@ jobs:
           aws lambda wait function-updated \
             --function-name $LAMBDA_FUNCTION_NAME
 
-          echo "Ensuring Lambda timeout is set to 30 seconds for Bedrock LLM generation..."
+          echo "Ensuring Lambda timeout is set to 90 seconds for Bedrock LLM generation..."
           aws lambda update-function-configuration \
             --function-name $LAMBDA_FUNCTION_NAME \
-            --timeout 30
+            --timeout 90
