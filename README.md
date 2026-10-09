@@ -3,10 +3,10 @@
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg?logo=python)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg?logo=fastapi)](https://fastapi.tiangolo.com/)
 [![AWS Lambda](https://img.shields.io/badge/AWS-Lambda%20Container-FF9900.svg?logo=amazon-aws)](https://aws.amazon.com/lambda/)
-[![Amazon Bedrock](https://img.shields.io/badge/Amazon%20Bedrock-openai.gpt--oss--20b--1%3A0-8C4FFF.svg?logo=amazon-aws)](https://aws.amazon.com/bedrock/)
+[![Amazon Bedrock](https://img.shields.io/badge/Amazon%20Bedrock-qwen.qwen3--32b--v1%3A0-8C4FFF.svg?logo=amazon-aws)](https://aws.amazon.com/bedrock/)
 [![Next.js 16](https://img.shields.io/badge/Next.js-16.2.9%20(App%20Router)-000000.svg?logo=next.js)](https://nextjs.org/)
 [![AWS CloudWatch](https://img.shields.io/badge/AWS-CloudWatch%20Telemetry-FF4F8B.svg?logo=amazon-cloudwatch)](https://aws.amazon.com/cloudwatch/)
-[![Pytest](https://img.shields.io/badge/Tests-7%20Passing-success.svg?logo=pytest)](https://docs.pytest.org/)
+[![Pytest](https://img.shields.io/badge/Tests-9%20Passing-success.svg?logo=pytest)](https://docs.pytest.org/)
 
 A production-grade, decoupled serverless application designed to forecast **PJM East (PJME)** electrical grid load and provide autonomous, context-aware operational intelligence.
 
