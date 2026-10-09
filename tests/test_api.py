@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 from src.main import app
-from app import get_live_weather, get_historical_weather
+from app import get_live_weather, get_historical_weather, get_forecast_weather, app as serverless_app
 
 def test_predict_success():
     # 'with' forces FastAPI to trigger the lifespan startup logic cleanly before testing
@@ -51,6 +51,23 @@ def test_historical_weather_tool():
     assert "temperature_celsius" in weather
     assert "temperature_fahrenheit" in weather
     assert "target_date" in weather
+
+def test_forecast_weather_tool():
+    weather = get_forecast_weather(hour=14, days=1)
+    assert weather["status"] in ("success", "fallback")
+    assert "temperature_celsius" in weather
+    assert "temperature_fahrenheit" in weather
+    assert "thermal_regime" in weather
+    assert "target_date" in weather
+    assert "target_hour" in weather
+
+def test_forecast_weather_endpoint():
+    with TestClient(serverless_app) as client:
+        resp = client.get("/weather/forecast?hour=14&days=1")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] in ("success", "fallback")
+        assert "temperature_celsius" in data
 
 from unittest.mock import patch
 

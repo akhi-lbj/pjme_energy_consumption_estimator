@@ -207,6 +207,110 @@ def get_historical_weather(
         }
 
 
+def get_forecast_weather(
+    date_str: str = None,
+    hour: int = 12,
+    days: int = 1,
+    lat: float = 39.95,
+    lon: float = -75.16
+) -> dict:
+    """
+    Fetches forward-looking hourly meteorological forecast data (up to 16 days ahead)
+    using the Open-Meteo High-Resolution Forecast API (open-access, zero-key, high-availability).
+    Enables forward day-ahead dispatch planning and weather-load correlation.
+    """
+    if not date_str:
+        target_dt = datetime.date.today() + datetime.timedelta(days=1)
+        date_str = target_dt.strftime("%Y-%m-%d")
+
+    safe_hour = max(0, min(23, hour))
+    safe_days = max(1, min(16, days))
+
+    try:
+        start_dt = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+        end_dt = start_dt + datetime.timedelta(days=safe_days - 1)
+        end_date_str = end_dt.strftime("%Y-%m-%d")
+    except Exception:
+        end_date_str = date_str
+
+    try:
+        url = (
+            f"https://api.open-meteo.com/v1/forecast?"
+            f"latitude={lat}&longitude={lon}&start_date={date_str}&end_date={end_date_str}&"
+            f"hourly=temperature_2m,relative_humidity_2m,apparent_temperature,wind_speed_10m,precipitation_probability"
+        )
+        req = urllib.request.Request(url, headers={"User-Agent": "PJME-Energy-Forecaster/1.0"})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            raw_data = json.loads(resp.read().decode("utf-8"))
+
+        hourly = raw_data.get("hourly", {})
+        temps = hourly.get("temperature_2m", [])
+        feels = hourly.get("apparent_temperature", [])
+        humidities = hourly.get("relative_humidity_2m", [])
+        winds = hourly.get("wind_speed_10m", [])
+        precips = hourly.get("precipitation_probability", [])
+
+        temp_c = temps[safe_hour] if len(temps) > safe_hour else 18.0
+        feels_c = feels[safe_hour] if len(feels) > safe_hour else temp_c
+        temp_f = round(temp_c * 9 / 5 + 32, 1)
+        feels_f = round(feels_c * 9 / 5 + 32, 1)
+        humidity = humidities[safe_hour] if len(humidities) > safe_hour else 50
+        wind_kmh = winds[safe_hour] if len(winds) > safe_hour else 12.0
+        precip_prob = precips[safe_hour] if len(precips) > safe_hour else 0
+
+        if temp_c <= 0:
+            thermal_regime = "Freezing Winter Load Spike"
+        elif temp_c < 12:
+            thermal_regime = "Cold Space-Heating Demand"
+        elif temp_c < 24:
+            thermal_regime = "Mild / Baseline Load"
+        else:
+            thermal_regime = "Warm Air Conditioning Cooling Surge"
+
+        day_temps = temps[:24] if temps else [temp_c]
+
+        return {
+            "status": "success",
+            "region": "PJM East (Hourly Meteorological Forecast)",
+            "target_date": date_str,
+            "target_hour": f"{safe_hour:02d}:00",
+            "forecast_days": safe_days,
+            "temperature_celsius": temp_c,
+            "temperature_fahrenheit": temp_f,
+            "feels_like_celsius": feels_c,
+            "feels_like_fahrenheit": feels_f,
+            "relative_humidity_percent": humidity,
+            "wind_speed_kmh": wind_kmh,
+            "precipitation_probability_percent": precip_prob,
+            "thermal_regime": thermal_regime,
+            "daily_min_celsius": min(day_temps),
+            "daily_max_celsius": max(day_temps),
+            "daily_min_fahrenheit": round(min(day_temps) * 9 / 5 + 32, 1),
+            "daily_max_fahrenheit": round(max(day_temps) * 9 / 5 + 32, 1),
+        }
+    except Exception as e:
+        logger.warning(f"Weather forecast lookup fallback triggered: {e}")
+        return {
+            "status": "fallback",
+            "region": "PJM East (Forecast Baseline Estimate)",
+            "target_date": date_str,
+            "target_hour": f"{safe_hour:02d}:00",
+            "forecast_days": safe_days,
+            "temperature_celsius": 18.0,
+            "temperature_fahrenheit": 64.4,
+            "feels_like_celsius": 18.0,
+            "feels_like_fahrenheit": 64.4,
+            "relative_humidity_percent": 50.0,
+            "wind_speed_kmh": 12.0,
+            "precipitation_probability_percent": 15,
+            "thermal_regime": "Mild / Baseline Load",
+            "daily_min_celsius": 14.0,
+            "daily_max_celsius": 22.0,
+            "daily_min_fahrenheit": 57.2,
+            "daily_max_fahrenheit": 71.6,
+        }
+
+
 def extract_text_from_content(content) -> str:
     """Extracts clean markdown text from LangChain content block structures."""
     if isinstance(content, str):
@@ -228,6 +332,24 @@ def extract_text_from_content(content) -> str:
 # Autonomous Bedrock & LangChain Tools Registration
 BEDROCK_TOOLS_CONFIG = {
     "tools": [
+        {
+            "toolSpec": {
+                "name": "get_forecast_weather",
+                "description": "Fetches forward-looking hourly meteorological forecast data (up to 16 days ahead) for PJM East (or specified coordinates) using Open-Meteo High-Resolution Forecast API. Used for upcoming dates, tomorrow's conditions, and day-ahead load projection correlations.",
+                "inputSchema": {
+                    "json": {
+                        "type": "object",
+                        "properties": {
+                            "date_str": {"type": "string", "description": "Target future forecast date (YYYY-MM-DD). Defaults to tomorrow if omitted."},
+                            "hour": {"type": "integer", "description": "Operating hour of the day (0-23) for hourly weather resolution."},
+                            "days": {"type": "integer", "description": "Number of forecast days forward (1-16, default: 1)."},
+                            "lat": {"type": "number", "description": "Latitude (default: 39.95 for Philadelphia / PJM East)."},
+                            "lon": {"type": "number", "description": "Longitude (default: -75.16 for Philadelphia / PJM East)."}
+                        }
+                    }
+                }
+            }
+        },
         {
             "toolSpec": {
                 "name": "get_historical_weather",
@@ -267,12 +389,17 @@ BEDROCK_TOOLS_CONFIG = {
 }
 
 COPILOT_TOOL_FUNCTIONS = {
+    "get_forecast_weather": get_forecast_weather,
+    "forecast": get_forecast_weather,
+    "Forecast": get_forecast_weather,
+    "forecast_weather": get_forecast_weather,
     "get_historical_weather": get_historical_weather,
     "get_live_weather": get_live_weather,
 }
 
 try:
     COPILOT_TOOLS = [
+        tool(get_forecast_weather),
         tool(get_historical_weather),
         tool(get_live_weather)
     ]
@@ -370,6 +497,11 @@ def historical_weather_endpoint(year: int = 2016, month: int = 1, dayofyear: int
     """Direct endpoint to verify get_historical_weather tool telemetry parsed from columns."""
     return get_historical_weather(year=year, month=month, dayofyear=dayofyear, hour=hour, lat=lat, lon=lon)
 
+@app.get("/weather/forecast")
+def forecast_weather_endpoint(date_str: str = None, hour: int = 12, days: int = 1, lat: float = 39.95, lon: float = -75.16):
+    """Direct endpoint to verify get_forecast_weather tool telemetry."""
+    return get_forecast_weather(date_str=date_str, hour=hour, days=days, lat=lat, lon=lon)
+
 @app.post("/predict")
 def predict_energy(payload: EnergyPredictionRequest, request: Request):
     try:
@@ -463,8 +595,12 @@ def energy_copilot(data: CopilotRequest):
 - Statistical Trends: Rolling 24h: {data.rolling_mean_24h:.2f} MW | Rolling 7d: {data.rolling_mean_7d:.2f} MW
 
 2. Autonomous Tool Directives:
-- You have access to tools for historical weather telemetry (get_historical_weather) and real-time live weather telemetry (get_live_weather).
+- You have access to three meteorological telemetry tools:
+  * get_forecast_weather: forward-looking hourly weather forecast telemetry (up to 16 days ahead) for upcoming dates, tomorrow's conditions, or day-ahead dispatch planning.
+  * get_live_weather: real-time live grid weather telemetry for current conditions.
+  * get_historical_weather: historical archive weather telemetry corresponding to past dataset benchmark dates.
 - Autonomously select and execute only the tools necessary to fulfill the operator's prompt.
+- If the operator asks about tomorrow, future weather, or day-ahead projections, invoke get_forecast_weather.
 - If the operator instructs not to use live weather, or only to provide historical data, respect their directive and invoke only the appropriate tool.
 - If no external meteorological data is needed, do not call any tools and respond directly.
 
@@ -527,6 +663,8 @@ def energy_copilot(data: CopilotRequest):
                             t_args.setdefault("dayofyear", active_date_meta.get("dayofyear"))
                             t_args.setdefault("hour", active_date_meta.get("hour"))
                             t_args.setdefault("date_str", active_date_meta.get("date_str"))
+                        elif t_name in ("get_forecast_weather", "forecast", "Forecast", "forecast_weather"):
+                            t_args.setdefault("hour", active_date_meta.get("hour", 12))
 
                         fn = COPILOT_TOOL_FUNCTIONS.get(t_name)
                         if fn:

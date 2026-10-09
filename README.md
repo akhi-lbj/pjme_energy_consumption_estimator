@@ -35,8 +35,10 @@ graph TB
         API -->|Bedrock Converse API| Bedrock["Amazon Bedrock (openai.gpt-oss-20b-1:0)"]
         API -->|Meteorological Archive API| HistWeather["Open-Meteo Archive API"]
         API -->|Live Telemetry API| LiveWeather["Open-Meteo High-Resolution API"]
+        API -->|Hourly Forecast API| ForeWeather["Open-Meteo Forecast API"]
         HistWeather -->|Historical Weather Tool| API
         LiveWeather -->|Live Weather Tool| API
+        ForeWeather -->|Forecast Weather Tool| API
         Bedrock <-->|Multi-Turn Autonomous Tools| API
     end
 
@@ -86,26 +88,28 @@ The figure below illustrates out-of-sample predictions vs. true demand across a 
 
 The application embeds an autonomous grid operator copilot powered by **Amazon Bedrock Converse API** utilizing `openai.gpt-oss-20b-1:0`.
 
-```text
+`	ext
 Operator Prompt ──> POST /copilot ──> Bedrock Converse Loop
                                             │
-               ┌────────────────────────────┴────────────────────────────┐
-               ▼                                                         ▼
-    Tool: get_live_weather(lat, lon)             Tool: get_historical_weather(y, m, doy, h)
-    Fetches real-time PJM East telemetry          Parses exact column date & retrieves archive
-               │                                                         │
-               └────────────────────────────┬────────────────────────────┘
+         ┌──────────────────────────────────┼──────────────────────────────────┐
+         ▼                                  ▼                                  ▼
+Tool: get_live_weather(lat, lon)   Tool: get_forecast_weather(date, h)  Tool: get_historical_weather(y, m, doy, h)
+Fetches real-time PJM East data    Queries forward hourly forecast      Parses exact column date & archive
+         │                                  │                                  │
+         └──────────────────────────────────┴──────────────────────────────────┘
                                             ▼
-                       Structured Multi-Turn JSON Synthesis
-                       - Thermal regime analysis (Heating/Cooling surge)
-                       - Markdown telemetry tables
-                       - Mandatory Actionable Operational Recommendations
-```
+                        Structured Multi-Turn JSON Synthesis
+                        - Thermal regime analysis (Heating/Cooling surge)
+                        - Markdown telemetry tables
+                        - Mandatory Actionable Operational Recommendations
+`
 
 ### Autonomous Meteorological Tools
 1. **`get_live_weather(lat, lon)`**:
    - Queries Open-Meteo High-Resolution API for current temperature, apparent temperature, relative humidity, and wind speed for regional grid coordinates (Philadelphia, PA: $39.95^\circ\text{N}, -75.16^\circ\text{W}$).
-2. **`get_historical_weather(year, month, dayofyear, hour, ...)`**:
+2. **`get_forecast_weather(date_str, hour, days, lat, lon)` (Forecast Tool)**:
+   - Queries Open-Meteo High-Resolution Forecast API for forward-looking hourly meteorological forecasts (up to 16 days ahead), computing projected temperatures, apparent temperatures, relative humidity, precipitation probability, and daily min/max bounds for proactive day-ahead dispatch planning.
+3. **`get_historical_weather(year, month, dayofyear, hour, ...)`**:
    - Dynamically derives the historical calendar date directly from active dashboard input columns and retrieves historical meteorological archive data to explain baseline load anomalies.
 
 ### Multi-Turn Agent Features
@@ -205,6 +209,14 @@ Dispatches conversational reasoning and autonomous tool execution to Amazon Bedr
   ]
 }
 ```
+
+### `GET /weather/forecast`
+Fetches forward-looking hourly meteorological forecast telemetry from Open-Meteo High-Resolution Forecast API (up to 16 days ahead).
+* **Query Parameters**:
+  - `date_str`: Target date in `YYYY-MM-DD` format (defaults to tomorrow if omitted).
+  - `hour`: Operating hour index `0` to `23` (default: `12`).
+  - `days`: Forecast horizon span in days `1` to `16` (default: `1`).
+  - `lat`, `lon`: Regional coordinates (defaults to Philadelphia / PJM East: `39.95`, `-75.16`).
 
 ---
 
